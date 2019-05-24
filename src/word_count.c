@@ -1,7 +1,7 @@
 #include "word_count.h"
 
 // 64 MB
-#define CHUNK_SIZE 64 * 1024 * 1024
+#define CHUNK_SIZE 2*1024//64 * 1024 * 1024
 
 char** read_file(char *filename, int rank, int num_ranks)
 {
@@ -57,13 +57,17 @@ char** read_file(char *filename, int rank, int num_ranks)
 
 void tokenize(char **text_array) {
 	for(int i = 0; i < sizeof(text_array); i++) {
-		for (char *p = text_array[i]; *p; p++)
-    	if (!isalnum(*p)) *p = ' ';
+		if(text_array[i] == NULL) {
+			return;
+		} else {
+			for (char *p = text_array[i]; *p; p++)
+    		if (!isalnum(*p)) *p = ' ';
 
-		char* token = strtok(text_array[i], " ");
-		while (token) {
-    	printf("token: %s\n", token);
-    	token = strtok(NULL, " ");
+			char* token = strtok(text_array[i], " ");
+			while (token) {
+    		printf("token: %s\n", token);
+    		token = strtok(NULL, " ");
+			}
 		}
 	}
 }
