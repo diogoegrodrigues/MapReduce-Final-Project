@@ -24,8 +24,8 @@ char** read_file(char *filename, int rank, int num_ranks)
 	MPI_Offset disp = rank * length;
 	MPI_Datatype contig, filetype;
 
-	int iterations = ceil( (double) (filesize / extent) );
-	//int iterations = 3;
+	int iterations = (int) ((filesize / extent) + 1);
+	printf("iterations: %d\n\n", iterations);
 
 	MPI_Type_contiguous(CHUNK_SIZE, MPI_CHAR, &contig);
 	MPI_Type_create_resized(contig, 0, extent, &filetype);

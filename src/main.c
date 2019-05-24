@@ -49,6 +49,8 @@ int main(int argc, char *argv[])
 	*/
 
   	char** text = read_file(filename, world_rank, num_ranks);
+
+  	printf("text: %s\n", text[0]);
 	//tokenize(text);
 	//free(text);
 
