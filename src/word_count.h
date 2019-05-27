@@ -11,7 +11,24 @@
 
 #include <mpi.h>
 
-char** read_file();
+//Hash Function
+#define SEED_LENGTH 65
+typedef uint64_t Hash;
+
+// 64 MB
+#define CHUNK_SIZE 64 * 1024 * 1024
+#define WORD_LENGTH 32
+#define BUCKET_SIZE 100
+
+typedef struct KeyValue {
+	char key[WORD_LENGTH];
+	uint64_t value;
+} KeyValue;
+
+char** readFile();
 void tokenize();
+Hash getDestRank();
+KeyValue** map();
+
 
 #endif

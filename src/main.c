@@ -48,25 +48,38 @@ int main(int argc, char *argv[])
 	}
 	*/
 
-  	char** text = read_file(filename, world_rank, num_ranks);
-
-  	printf("text: %s\n", text[0]);
-	//tokenize(text);
-	//free(text);
-
 	/*
-
 	MPI_Finalize();printf("%s\n", text[0]);
 	if(world_rank == 0 )
 		if(filename == NULL)
 			print_usage(argv[0]);
+	*/
 
-			*/
-	int a = 0;
-  	for(int i = 0; i < 10000; i++)
-  		a += 2;
+	int iterations;
+  	char** text = readFile(filename, world_rank, num_ranks, &iterations);
 
-  	printf("%d\n", a);
+	KeyValue** buckets = map(world_rank, num_ranks, iterations, text);
+
+	printf("\n\n\n");
+
+	int l, j;
+	int a[2] = {136, 82};
+	for(l = 0; l < num_ranks; l++)
+	{
+		printf("DESTINATION RANK %d\n", l);
+
+		for(j = 0; j < a[l]; j++)
+		{
+			printf("Position: %d\nKey: %s\nValue: %d\n\n", j, buckets[l][j].key, buckets[l][j].value);
+		}
+	}
+
+	int b = 0;
+  	for(int i = 0; i < 1000000000; i++)
+  		b += 2;
+
+  	printf("%d\n", b);
+
 	
 	return 0;
 }
