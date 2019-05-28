@@ -23,9 +23,12 @@ char** readFile(char* filename, int rank, int num_ranks, int* iterations)
 	MPI_Aint extent = num_ranks * length;
 	MPI_Offset disp = rank * length;
 	MPI_Datatype contig, filetype;
-
-	(*iterations) = (int) ((filesize / extent) + 1);
-	//printf("iterations: %d\n\n", iterations);
+	
+	float aux = (float)(filesize / extent);
+	if( (aux != 0) && (aux - (int)aux == 0) )
+		(*iterations) = (int)aux;
+	else
+		(*iterations) = (int)aux + 1;
 
 	MPI_Type_contiguous(CHUNK_SIZE, MPI_CHAR, &contig);
 	MPI_Type_create_resized(contig, 0, extent, &filetype);
@@ -81,9 +84,57 @@ Hash getDestRank(const char *word, size_t length, int num_ranks)
     return (uint64_t)(hash % (uint64_t)num_ranks);
 }
 
+void updatingBuckets(int num_ranks, char* new_word, int* word_counter, KeyValue** buckets, int flag)
+{
+	int i;
+
+	int destRank = getDestRank(new_word, strlen(new_word) + 1, num_ranks);
+
+	for(i = 0; i <= word_counter[destRank]; i++)
+	{
+		if(!strcmp(buckets[destRank][i].key, new_word))
+		{
+			buckets[destRank][i].value++;
+
+			flag = 0;
+			break;
+		}
+	}
+
+	if(flag)
+	{
+		for(i = 0; i < strlen(new_word); i++)
+		{
+			buckets[destRank][word_counter[destRank]].key[i] = new_word[i];
+			//printf("Character: %c ", buckets[destRank][word_counter[destRank]].key[i]);
+		}
+
+		buckets[destRank][word_counter[destRank]].key[i] = '\0';
+
+		//printf("\nbuckets[%d][%d].key: %s\nstrlen(buckets[%d][%d].key): %lu\n\n", destRank, word_counter[destRank], buckets[destRank][word_counter[destRank]].key, destRank, word_counter[destRank], strlen(buckets[destRank][word_counter[destRank]].key));
+
+		buckets[destRank][word_counter[destRank]].value = 1;
+
+		word_counter[destRank]++;
+		//printf("word_counter[destRank]: %d\n", word_counter[destRank]);
+
+		if( (word_counter[destRank] % BUCKET_SIZE) == 0 )
+		{
+			//printf("\n------------------- REALLOC -------------------\n");
+			buckets[destRank] = (KeyValue*) realloc(buckets[destRank], 2 * word_counter[destRank] * sizeof(KeyValue));
+			if(buckets[destRank] == NULL)
+			{
+				fprintf(stderr, "Error in realloc\n");
+				MPI_Finalize();
+				exit(1);
+			}
+		}
+	}
+}
+
 KeyValue** map(int rank, int num_ranks, int iterations, char** text)
 {
-	int i, j, flag = 1, increase = 2, destRank = 0;
+	int i, j, flag = 1;
 
 	int* word_counter = (int*) calloc(num_ranks, sizeof(int));
 
@@ -92,80 +143,52 @@ KeyValue** map(int rank, int num_ranks, int iterations, char** text)
 	for(i = 0; i < num_ranks; i++)
 		buckets[i] = (KeyValue*) malloc(BUCKET_SIZE * sizeof(KeyValue));
 
-	printf("sizeof(buckets[0][0].key): %lu\n", sizeof(buckets[0][0].key));
+	//printf("sizeof(buckets[0][0].key): %lu\n", sizeof(buckets[0][0].key));
 
 	for(i = 0; i < iterations; i++) 
 	{
 		if(strlen(text[i]) != 0)
 		{
-			printf("RANK %d!!!!!!!!!!!!!!!!!!!!!!!\n", rank);
 			tokenize(text[i]);
 
 			char* new_word = strtok(text[i], " ");
-			while (new_word) {
-
+			while (new_word) 
+			{
 				if( (strlen(new_word) + 1) < WORD_LENGTH )
 				{
-					//NORMAL
+					updatingBuckets(num_ranks, new_word, word_counter, buckets, flag);
 				}
 				else
 				{
+					int l, x;
 					int splitString = (int)(strlen(new_word)/WORD_LENGTH) + 1;
 
 					char** aux_word = (char**) malloc(splitString * sizeof(char*));
 
-					for(l = 0; l < splitString; l)
+					for(l = 0; l < splitString; l++)
 					{
-						if(l != splitString - 1)
-						for(x = 0; x < WORD_LENGTH - 1; x++)
-							aux_word[l] = new_word[x]; 
-					}						
-				}
+						if(l != splitString-1)
+						{
+							aux_word[l] = (char*) malloc(WORD_LENGTH * sizeof(char));
 
+							for(x = 0; x < WORD_LENGTH - 1; x++)
+								aux_word[l][x] = new_word[x + l*(WORD_LENGTH-1)];;
 
+							aux_word[l][x] = '\0';
+						}
+						else
+						{
+							aux_word[l] = (char*) malloc(( strlen(new_word) - ( (splitString - 1) * (WORD_LENGTH - 1) ) ) * sizeof(char));
 
-				//STORE
-				destRank = getDestRank(new_word, strlen(new_word) + 1, num_ranks);
+							for(x = 0; x < ( strlen(new_word) - ( (splitString - 1) * (WORD_LENGTH - 1) ) ); x++)
+								aux_word[l][x] = new_word[x + l*(WORD_LENGTH-1)];
 
-				printf("\nNew Word: %s\nStrlen: %lu\nDestination Rank: %d\n", new_word, strlen(new_word), destRank);
-
-				for(j = 0; j <= word_counter[destRank]; j++)
-				{
-					if(!strcmp(buckets[destRank][j].key, new_word))
-					{
-						buckets[destRank][j].value++;
-
-						printf("SAME WORD: %s\nNEW VALUE: %d\n", buckets[destRank][j].key, buckets[destRank][j].value);
-
-						flag = 0;
-						break;
-					}
-				}
-
-				if(flag)
-				{
-					int k;
-					for(k = 0; k < strlen(new_word); k++)
-					{
-						buckets[destRank][word_counter[destRank]].key[k] = new_word[k];
-						printf("Character: %c ", buckets[destRank][word_counter[destRank]].key[k]);
+							aux_word[l][x] = '\0';
+						}
 					}
 
-					buckets[destRank][word_counter[destRank]].key[k] = '\0';
-
-					printf("\nbuckets[%d][%d].key: %s\nstrlen(buckets[%d][%d].key): %lu\n\n", destRank, word_counter[destRank], buckets[destRank][word_counter[destRank]].key, destRank, word_counter[destRank], strlen(buckets[destRank][word_counter[destRank]].key));
-
-					buckets[destRank][word_counter[destRank]].value = 1;
-
-					word_counter[destRank]++;
-					printf("word_counter[destRank]: %d\n", word_counter[destRank]);
-
-					if( (word_counter[destRank] % BUCKET_SIZE) == 0 )
-					{
-						printf("\n------------------- REALLOC -------------------\n");
-						buckets[destRank] = (KeyValue*) realloc(buckets[destRank], increase * BUCKET_SIZE * sizeof(KeyValue));
-						increase++;
-					}
+					for(l = 0; l < splitString; l++)
+						updatingBuckets(num_ranks, aux_word[l], word_counter, buckets, flag);
 				}
 
 				flag = 1;

@@ -8,6 +8,7 @@
 #include <string.h>
 #include <assert.h>
 #include <ctype.h>
+#include <stdint.h>
 
 #include <mpi.h>
 
@@ -25,10 +26,10 @@ typedef struct KeyValue {
 	uint64_t value;
 } KeyValue;
 
-char** readFile();
-void tokenize();
-Hash getDestRank();
-KeyValue** map();
+char** readFile(char* filename, int rank, int num_ranks, int* iterations);
+void tokenize(char* text_array);
+Hash getDestRank(const char *word, size_t length, int num_ranks);
+void updatingBuckets(int num_ranks, char* new_word, int* word_counter, KeyValue** buckets, int flag);
+KeyValue** map(int rank, int num_ranks, int iterations, char** text);
 
-
-#endif
+#endif //__WORD_COUNT_H__
