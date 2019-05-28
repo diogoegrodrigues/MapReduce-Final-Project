@@ -31,6 +31,6 @@ void tokenize(char* text_array);
 Hash getDestRank(const char *word, size_t length, int num_ranks);
 void updatingBuckets(int num_ranks, char* new_word, int* word_counter, KeyValue** buckets, int flag);
 KeyValue** map(int rank, int num_ranks, int iterations, char** text, int *sdispls);
-void reduce(KeyValue** buckets, int rank, int num_ranks, int *sdispls);
+void reduce(KeyValue** buckets, int rank, int num_ranks, int *sbucket_sizes);
 
 #endif //__WORD_COUNT_H__

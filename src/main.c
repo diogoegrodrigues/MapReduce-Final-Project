@@ -59,12 +59,12 @@ int main(int argc, char *argv[])
 	int iterations;
   char** text = readFile(filename, world_rank, num_ranks, &iterations);
 
-	int *sdispls = (int*)malloc(num_ranks*sizeof(int));
-	KeyValue** buckets = map(world_rank, num_ranks, iterations, text, sdispls);
+	int *sbucket_sizes = (int*)malloc(num_ranks*sizeof(int));
+	KeyValue** buckets = map(world_rank, num_ranks, iterations, text, sbucket_sizes);
 
 	MPI_Barrier(MPI_COMM_WORLD);
 
-	reduce(buckets, world_rank, num_ranks, sdispls);
+	reduce(buckets, world_rank, num_ranks, sbucket_sizes);
 
 	MPI_Finalize();
 	return 0;

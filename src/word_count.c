@@ -132,7 +132,7 @@ void updatingBuckets(int num_ranks, char* new_word, int* word_counter, KeyValue*
 	}
 }
 
-KeyValue** map(int rank, int num_ranks, int iterations, char** text, int *sdispls)
+KeyValue** map(int rank, int num_ranks, int iterations, char** text, int *sbucket_sizes)
 {
 	int i, j, flag = 1;
 
@@ -199,38 +199,82 @@ KeyValue** map(int rank, int num_ranks, int iterations, char** text, int *sdispl
 
 	for(int i = 0; i < num_ranks; i++)
 	{
-		sdispls[i] = word_counter[i];
+		sbucket_sizes[i] = word_counter[i];
 	}
 
 	return buckets;
 }
 
-void reduce(KeyValue** buckets, int rank, int num_ranks, int *sdispls)
+void reduce(KeyValue** buckets, int rank, int num_ranks, int *sbucket_sizes)
 {
 	printf("RANK %d IN REDUCE\n", rank);
-	int buf_size = 0;
-	for(int i = 0; i < num_ranks; i++)
-	{
-		printf("\nRANK: %d\nSEND\nSIZE OF BUCKET[%d]: %d\n", rank,  i, sdispls[i]);
-		buf_size += sdispls[i];
-	}
-
+	int sbuf_size = 0;
+	int rbuf_size = 0;
+	int *rbucket_sizes = (int*)malloc(num_ranks * sizeof(int));
+	int *scounts = (int*)malloc(num_ranks * sizeof(int));
+	int *rcounts = (int*)malloc(num_ranks * sizeof(int));
+	int *sdispls = (int*)malloc(num_ranks * sizeof(int));
 	int *rdispls = (int*)malloc(num_ranks * sizeof(int));
-	MPI_Alltoall(&sdispls, 1, MPI_INT, &rdispls, 1, MPI_INT,  MPI_COMM_WORLD);
-/*
 	for(int i = 0; i < num_ranks; i++)
 	{
-		printf("\nRANK: %d\nRECV\nSIZE OF BUCKET[%d]: %d\n", rank, i, rdispls[i]);
-	}
-	/*
-	KeyValue *sendbuf = (KeyValue*)malloc(buf_size * sizeof(KeyValue));
-	KeyValue *recvbuf = (KeyValue*)malloc(num_ranks * BUCKET_SIZE * sizeof(KeyValue));
-	for(int i = 0; i < num_ranks; i++)
-	{
-		for(int j = 0; j < sdispls[i]; j++)
+		printf("\nRANK: %d\nSEND\nSIZE OF BUCKET[%d]: %d\n", rank,  i, sbucket_sizes[i]);
+		if(sbucket_sizes[i] > 0)
 		{
-			sendbuf[j+sdispls[i]] = buckets[i][j];
+			sbuf_size += sbucket_sizes[i];
+		} else {
+			sbuf_size += 1;
 		}
 	}
-	*/
+
+	for (int i = 0; i < num_ranks; i++)
+	{
+			 rbucket_sizes[i] = 0;
+	}
+	MPI_Alltoall(sbucket_sizes, 1, MPI_INT, rbucket_sizes, 1, MPI_INT,  MPI_COMM_WORLD);
+
+	for(int i = 0; i < num_ranks; i++)
+	{
+		printf("\nRANK: %d\nRECV\nSIZE OF BUCKET[%d]: %d\n", rank, i, rbucket_sizes[i]);
+		rbuf_size += rbucket_sizes[i];
+		scounts[i] = i;
+		rcounts[i] = rank;
+	}
+	KeyValue *sendbuf = (KeyValue*)malloc(sbuf_size * sizeof(KeyValue));
+	KeyValue *recvbuf = (KeyValue*)malloc(rbuf_size * sizeof(KeyValue));
+	int rdisp = 0;
+	int sdisp = 0;
+	for(int i = 0; i < num_ranks; i++)
+	{
+		sdispls[i] = sdisp;
+		rdispls[i] = rdisp;
+		if(sbucket_sizes[i] > 0)
+		{
+			for(int j = 0; j < sbucket_sizes[i]; j++)
+			{
+				sendbuf[j+sdisp] = buckets[i][j];
+			}
+			sdisp += sbucket_sizes[i];
+		} else {
+			sendbuf[sdisp].value = (uint64_t)-1;
+			sdisp += 1;
+		}
+		if(rbucket_sizes > 0)
+		{
+			rdisp = rbucket_sizes[i];
+		} else {
+			rdisp += 1;
+		}
+	}
+	if(rank== 0)
+	{
+		printf("SENDBUF[0].value: %ld\n", sendbuf[0].value);
+		printf("BUCKETS[0][0].value: %ld\n", buckets[0][0].value);
+		printf("SENDBUF[0].key: %s\n", sendbuf[0].key);
+		printf("BUCKETS[0][0].key: %s\n", buckets[0][0].key);
+		printf("RANK 0: SIZE: %d\n", sbuf_size);
+	} else {
+		printf("RANK 1: SENDBUF[0].value: %ld\n", sendbuf[0].value);
+		printf("RANK 1: SIZE: %d\n", sbuf_size);
+	}
+	MPI_Alltoallv(sendbuf, scounts, sdispls, MPI_INT, recvbuf, rcounts, rdispls, MPI_INT, MPI_COMM_WORLD);
 }
