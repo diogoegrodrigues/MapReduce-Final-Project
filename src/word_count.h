@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #include <mpi.h>
 
@@ -26,10 +27,18 @@ typedef struct KeyValue {
 	uint64_t value;
 } KeyValue;
 
+// Function for reading the file
 char** readFile(char* filename, int rank, int num_ranks, int* iterations);
+
+// Functions for the Map() phase
 void tokenize(char* text_array);
 Hash getDestRank(const char *word, size_t length, int num_ranks);
 void updatingBuckets(int num_ranks, char* new_word, int* word_counter, KeyValue** buckets, int flag);
-KeyValue** map(int rank, int num_ranks, int iterations, char** text);
+KeyValue** map(int rank, int num_ranks, int iterations, char** text, int *sdispls);
+
+// Functions for redistributing the <key, value> pairs
+void createKeyValueDatatype(MPI_Datatype *MPI_KeyValue);
+
+void reduce(KeyValue** buckets, int rank, int num_ranks, int *sdispls);
 
 #endif //__WORD_COUNT_H__

@@ -9,7 +9,7 @@
 
 void print_usage(char*);
 
-int main(int argc, char *argv[]) 
+int main(int argc, char *argv[])
 {
 	int opt, world_rank, num_ranks;
 	int repeat = 1;
@@ -57,19 +57,23 @@ int main(int argc, char *argv[])
 	*/
 
 	int iterations;
-  	char** text = readFile(filename, world_rank, num_ranks, &iterations);
+	char** text = readFile(filename, world_rank, num_ranks, &iterations);
 
-  	KeyValue** buckets = map(world_rank, num_ranks, iterations, text);
+	int *sdispls = (int*)malloc(num_ranks*sizeof(int));
+	KeyValue** buckets = map(world_rank, num_ranks, iterations, text, sdispls);
+
+	MPI_Datatype MPI_KeyValue;
+	createKeyValueDatatype(&MPI_KeyValue);
 
 	MPI_Barrier(MPI_COMM_WORLD);
 
-	
+	//reduce(buckets, world_rank, num_ranks, sdispls);
 
 	MPI_Finalize();
 	return 0;
 }
 
-void print_usage(char *program) 
+void print_usage(char *program)
 {
 	fprintf(stderr, "Usage: %s [-r repeat] [-i input-file]\n", program);
 	exit(1);
