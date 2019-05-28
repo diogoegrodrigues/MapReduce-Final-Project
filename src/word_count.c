@@ -14,7 +14,7 @@ char** readFile(char* filename, int rank, int num_ranks, int* iterations)
 		MPI_File_get_size(fh, &filesize);
 		MPI_File_close(&fh);
 
-		printf("File Size in bytes: %lu\nFile Size in MB: %f\n\n", filesize, (double)(filesize*0.00000095367432));
+		printf("File Size in bytes: %llu\nFile Size in MB: %f\n\n", filesize, (double)(filesize*0.00000095367432));
 	}
 
 	MPI_Bcast(&filesize, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -23,7 +23,7 @@ char** readFile(char* filename, int rank, int num_ranks, int* iterations)
 	MPI_Aint extent = num_ranks * length;
 	MPI_Offset disp = rank * length;
 	MPI_Datatype contig, filetype;
-	
+
 	float aux = (float)(filesize / extent);
 	if( (aux != 0) && (aux - (int)aux == 0) )
 		(*iterations) = (int)aux;
@@ -71,16 +71,16 @@ void tokenize(char* text_array)
 Hash getDestRank(const char *word, size_t length, int num_ranks)
 {
     Hash hash = 0;
-    
+
     uint64_t i;
     for (i = 0; i < length; i++)
     {
         Hash num_char = (Hash)word[i];
         Hash seed     = (Hash)key_seed_num[(i % SEED_LENGTH)];
-        
+
         hash += num_char * seed * (i + 1);
     }
-    
+
     return (uint64_t)(hash % (uint64_t)num_ranks);
 }
 
@@ -132,7 +132,7 @@ void updatingBuckets(int num_ranks, char* new_word, int* word_counter, KeyValue*
 	}
 }
 
-KeyValue** map(int rank, int num_ranks, int iterations, char** text)
+KeyValue** map(int rank, int num_ranks, int iterations, char** text, int *sdispls)
 {
 	int i, j, flag = 1;
 
@@ -145,14 +145,14 @@ KeyValue** map(int rank, int num_ranks, int iterations, char** text)
 
 	//printf("sizeof(buckets[0][0].key): %lu\n", sizeof(buckets[0][0].key));
 
-	for(i = 0; i < iterations; i++) 
+	for(i = 0; i < iterations; i++)
 	{
 		if(strlen(text[i]) != 0)
 		{
 			tokenize(text[i]);
 
 			char* new_word = strtok(text[i], " ");
-			while (new_word) 
+			while (new_word)
 			{
 				if( (strlen(new_word) + 1) < WORD_LENGTH )
 				{
@@ -197,5 +197,40 @@ KeyValue** map(int rank, int num_ranks, int iterations, char** text)
 		}
 	}
 
+	for(int i = 0; i < num_ranks; i++)
+	{
+		sdispls[i] = word_counter[i];
+	}
+
 	return buckets;
+}
+
+void reduce(KeyValue** buckets, int rank, int num_ranks, int *sdispls)
+{
+	printf("RANK %d IN REDUCE\n", rank);
+	int buf_size = 0;
+	for(int i = 0; i < num_ranks; i++)
+	{
+		printf("\nRANK: %d\nSEND\nSIZE OF BUCKET[%d]: %d\n", rank,  i, sdispls[i]);
+		buf_size += sdispls[i];
+	}
+
+	int *rdispls = (int*)malloc(num_ranks * sizeof(int));
+	MPI_Alltoall(&sdispls, 1, MPI_INT, &rdispls, 1, MPI_INT,  MPI_COMM_WORLD);
+/*
+	for(int i = 0; i < num_ranks; i++)
+	{
+		printf("\nRANK: %d\nRECV\nSIZE OF BUCKET[%d]: %d\n", rank, i, rdispls[i]);
+	}
+	/*
+	KeyValue *sendbuf = (KeyValue*)malloc(buf_size * sizeof(KeyValue));
+	KeyValue *recvbuf = (KeyValue*)malloc(num_ranks * BUCKET_SIZE * sizeof(KeyValue));
+	for(int i = 0; i < num_ranks; i++)
+	{
+		for(int j = 0; j < sdispls[i]; j++)
+		{
+			sendbuf[j+sdispls[i]] = buckets[i][j];
+		}
+	}
+	*/
 }
