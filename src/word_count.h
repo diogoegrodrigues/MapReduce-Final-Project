@@ -39,6 +39,6 @@ KeyValue** map(int rank, int num_ranks, int iterations, char** text, int *sdispl
 // Functions for redistributing the <key, value> pairs
 void createKeyValueDatatype(MPI_Datatype *MPI_KeyValue);
 
-void reduce(KeyValue** buckets, int rank, int num_ranks, int *sdispls);
+void reduce(KeyValue** buckets, int rank, int num_ranks, int *sbucket_sizes);
 
 #endif //__WORD_COUNT_H__
