@@ -28,6 +28,8 @@ struct Config {
 	int* recvDispls;
 	KeyValue* sendBuf;
 	KeyValue* recvBuf;
+
+	KeyValue* reducedBuf;
 };
 
 struct Config config;
@@ -313,17 +315,10 @@ void redistributeKeyValues()
 			config.recvBucketSizes[i] = 1;
 		}
 	}
-
-	printf("\nRANK: %d sBufSize %d rBufSize: %d\n", config.rank, config.sendBufSize, config.recvBufSize);
-
-	for(int i = 0; i < config.num_ranks; i++)
-	{
-		printf("\nRANK: %d SIZE OF SEND BUCKET[%d]: %d\n", config.rank, i, config.sendBucketSizes[i]);
-		printf("\nRANK: %d SIZE OF RECV BUCKET[%d]: %d\n", config.rank, i, config.recvBucketSizes[i]);
-	}
 	
 	MPI_Alltoallv(config.sendBuf, config.sendBucketSizes, config.sendDispls, config.MPI_KeyValue, config.recvBuf, config.recvBucketSizes, config.recvDispls, config.MPI_KeyValue, MPI_COMM_WORLD);
 	
+	/*
 	if(config.rank == 0) 
 	{
 		for(int i = 0; i < config.recvBufSize; i++)
@@ -331,5 +326,57 @@ void redistributeKeyValues()
 			printf("config.recvBuf[%d].key: %s\n", i, config.recvBuf[i].key);
 			printf("config.recvBuf[%d].value: %ld\n", i, config.recvBuf[i].value);
 		}
+	}
+	*/
+}
+
+void reduce()
+{
+	int i, j;
+	int aux = 0, aux2 = 1, auxValue = 0, counter = 0;
+
+	int start = config.recvDispls[1];
+	int size = config.recvBucketSizes[0];
+
+	config.reducedBuf = (KeyValue*) malloc(config.recvBufSize * sizeof(KeyValue));
+
+	for(i = 0; i < config.recvBufSize; i++)
+	{
+		if(i == size)
+		{
+			size += config.recvBucketSizes[++aux];
+			start = config.recvDispls[++aux2];
+		}
+
+		if(strlen(config.recvBuf[i].key) != 0)
+		{
+			if (aux2 != config.num_ranks)
+			{
+				for (j = start; j < config.recvBufSize; j++)
+				{
+					if (strcmp(config.recvBuf[i].key, config.recvBuf[j].key) == 0)
+					{
+						auxValue += config.recvBuf[j].value;
+
+						config.recvBuf[j].key[0] = '\0';
+
+						//if(strlen(config.recvBuf[j].key) == 0)
+						//	printf("position: %d WORD: %s\n", config.recvBuf[i].key);
+					}
+				}
+			}
+			
+			counter++;
+			config.reducedBuf[counter - 1] = config.recvBuf[i];
+			config.reducedBuf[counter - 1].value += auxValue;
+			auxValue = 0;
+		}
+	}
+
+	if (config.rank == 0)
+	{
+		printf("config.recvBufSize: %d counter: %d\n", config.recvBufSize, counter);
+		for(i = 0; i < counter-1; i++)
+			printf("position: %d WORD: %s VALUE: %d\n", i, config.reducedBuf[i].key, config.reducedBuf[i].value);
 	}
 }

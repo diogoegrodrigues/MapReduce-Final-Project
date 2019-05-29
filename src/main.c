@@ -61,6 +61,8 @@ int main(int argc, char *argv[])
 	MPI_Barrier(MPI_COMM_WORLD);
 
 	redistributeKeyValues();
+
+	reduce();
 	
 	MPI_Finalize();
 	return 0;

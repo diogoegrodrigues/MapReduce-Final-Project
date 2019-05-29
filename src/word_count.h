@@ -42,7 +42,7 @@ void createKeyValueDatatype();
 void redistributeKeyValues();
 
 // Functions for the Reduce() phase
-
+void reduce();
 
 
 #endif //__WORD_COUNT_H__
