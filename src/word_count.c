@@ -3,12 +3,44 @@
 const char 			 key_seed[SEED_LENGTH] = "b4967483cf3fa84a3a233208c129471ebc49bdd3176c8fb7a2c50720eb349461";
 const unsigned short *key_seed_num 		   = (unsigned short*)key_seed;
 
-char** readFile(char* filename, int rank, int num_ranks, int* iterations)
+struct Config {
+	/* MPI rank information */
+	int rank, num_ranks;
+
+	/* Number of iterations to read the all file */
+	int iterations;
+
+	/* Buffer to store all the data read from the file */
+	char** text;
+
+	/* Buckets to store the <key, value> pairs for each rank */
+	KeyValue** buckets;
+
+	/* New MPI_Datatype to be possible to send the <key, value> pairs */
+	MPI_Datatype MPI_KeyValue;
+
+	/* Variables to process all the redistribution of the <key, value> pairs */
+	int sendBufSize;
+	int* sendBucketSizes;
+	int recvBufSize;
+	int* recvBucketSizes;
+	int* sendDispls;
+	int* recvDispls;
+	KeyValue* sendBuf;
+	KeyValue* recvBuf;
+};
+
+struct Config config;
+
+void readFile(char* filename)
 {
 	MPI_File fh;
 	MPI_Offset filesize;
 
-	if(rank == 0)
+	MPI_Comm_rank(MPI_COMM_WORLD, &config.rank);
+  	MPI_Comm_size(MPI_COMM_WORLD, &config.num_ranks);
+
+  	if(config.rank == 0)
 	{
 		MPI_File_open(MPI_COMM_SELF, filename, MPI_MODE_RDONLY, MPI_INFO_NULL, &fh);
 		MPI_File_get_size(fh, &filesize);
@@ -20,43 +52,41 @@ char** readFile(char* filename, int rank, int num_ranks, int* iterations)
 	MPI_Bcast(&filesize, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
 	MPI_Aint length = CHUNK_SIZE * sizeof(char);
-	MPI_Aint extent = num_ranks * length;
-	MPI_Offset disp = rank * length;
+	MPI_Aint extent = config.num_ranks * length;
+	MPI_Offset disp = config.rank * length;
 	MPI_Datatype contig, filetype;
 
 	float aux = (float)filesize / (float)extent;
 
 	if( (aux != 0) && (aux - (int)aux == 0) )
-		(*iterations) = (int)aux;
+		config.iterations = (int)aux;
 	else
-		(*iterations) = (int)aux + 1;
+		config.iterations = (int)aux + 1;
 
 	MPI_Type_contiguous(CHUNK_SIZE, MPI_CHAR, &contig);
 	MPI_Type_create_resized(contig, 0, extent, &filetype);
 	MPI_Type_commit(&filetype);
 
 	int i;
-	char** buffer = (char**) malloc((*iterations) * sizeof(char*));
-	for(i = 0; i < (*iterations); i++)
-		buffer[i] = (char*) malloc(CHUNK_SIZE * sizeof(char));
+	config.text = (char**) malloc(config.iterations * sizeof(char*));
+	for(i = 0; i < config.iterations; i++)
+		config.text[i] = (char*) malloc(CHUNK_SIZE * sizeof(char));
 
 	MPI_File_open(MPI_COMM_WORLD, filename, MPI_MODE_RDONLY, MPI_INFO_NULL, &fh);
 	MPI_File_set_view(fh, disp, MPI_CHAR, filetype, "native", MPI_INFO_NULL);
 
-	for(i = 0; i < (*iterations); i++)
-		MPI_File_read_all(fh, buffer[i], CHUNK_SIZE, MPI_CHAR, MPI_STATUS_IGNORE);
+	for(i = 0; i < config.iterations; i++)
+		MPI_File_read_all(fh, config.text[i], CHUNK_SIZE, MPI_CHAR, MPI_STATUS_IGNORE);
 
 	MPI_File_close(&fh);
 
-	for(i = 0; i < (*iterations); i++)
+	for(i = 0; i < config.iterations; i++)
 	{
-		if(strlen(buffer[i])==0)
-			printf("Rank: %d\nbuffer[%d]: empty!!!\n\n", rank, i);
+		if(strlen(config.text[i])==0)
+			printf("Rank: %d\ntext[%d]: empty!!!\n\n", config.rank, i);
 		else
-			printf("Rank: %d\nsizeof: %lu\nstrlen: %lu\nbuffer[%d][0]: %c\n\n", rank, sizeof(buffer[i]), strlen(buffer[i]), i, buffer[i][0]);
+			printf("Rank: %d\nstrlen: %lu\ntext[%d][0]: %c\n\n", config.rank, strlen(config.text[i]), i, config.text[i][0]);
 	}
-
-	return buffer;
 }
 
 void tokenize(char* text_array)
@@ -65,11 +95,9 @@ void tokenize(char* text_array)
 
 	for (p = text_array; *p; p++)
 		if (!isalnum(*p)) *p = ' ';
-
-	return;
 }
 
-Hash getDestRank(const char *word, size_t length, int num_ranks)
+Hash getDestRank(const char *word, size_t length)
 {
     Hash hash = 0;
 
@@ -82,20 +110,20 @@ Hash getDestRank(const char *word, size_t length, int num_ranks)
         hash += num_char * seed * (i + 1);
     }
 
-    return (uint64_t)(hash % (uint64_t)num_ranks);
+    return (uint64_t)(hash % (uint64_t)config.num_ranks);
 }
 
-void updatingBuckets(int num_ranks, char* new_word, int* word_counter, KeyValue** buckets, int flag)
+void updatingBuckets(char* new_word)
 {
-	int i;
+	int i, flag = 1;
 
-	int destRank = getDestRank(new_word, strlen(new_word) + 1, num_ranks);
+	int destRank = getDestRank(new_word, strlen(new_word) + 1);
 
-	for(i = 0; i <= word_counter[destRank]; i++)
+	for(i = 0; i <= config.sendBucketSizes[destRank]; i++)
 	{
-		if(!strcmp(buckets[destRank][i].key, new_word))
+		if(!strcmp(config.buckets[destRank][i].key, new_word))
 		{
-			buckets[destRank][i].value++;
+			config.buckets[destRank][i].value++;
 
 			flag = 0;
 			break;
@@ -104,12 +132,13 @@ void updatingBuckets(int num_ranks, char* new_word, int* word_counter, KeyValue*
 
 	if(flag)
 	{
-		word_counter[destRank]++;
+		config.sendBucketSizes[destRank]++;
+		config.sendBufSize++;
 
-		if( (word_counter[destRank] % BUCKET_SIZE) == 0 )
+		if( (config.sendBucketSizes[destRank] % BUCKET_SIZE) == 0 )
 		{
-			buckets[destRank] = (KeyValue*) realloc(buckets[destRank], 2 * word_counter[destRank] * sizeof(KeyValue));
-			if(buckets[destRank] == NULL)
+			config.buckets[destRank] = (KeyValue*) realloc(config.buckets[destRank], 2 * config.sendBucketSizes[destRank] * sizeof(KeyValue));
+			if(config.buckets[destRank] == NULL)
 			{
 				fprintf(stderr, "Error in realloc\n");
 				MPI_Finalize();
@@ -118,199 +147,189 @@ void updatingBuckets(int num_ranks, char* new_word, int* word_counter, KeyValue*
 		}
 
 		for(i = 0; i < strlen(new_word); i++)
-			buckets[destRank][word_counter[destRank] - 1].key[i] = new_word[i];
+			config.buckets[destRank][config.sendBucketSizes[destRank] - 1].key[i] = new_word[i];
 
-		buckets[destRank][word_counter[destRank] - 1].key[i] = '\0';
+		config.buckets[destRank][config.sendBucketSizes[destRank] - 1].key[i] = '\0';
 
-		buckets[destRank][word_counter[destRank] - 1].value = 1;
+		config.buckets[destRank][config.sendBucketSizes[destRank] - 1].value = 1;
 	}
+
+	flag = 1;
 }
 
-KeyValue** map(int rank, int num_ranks, int iterations, char** text, int *sbucket_sizes)
+
+void map()
 {
-	int i, j, flag = 1;
+	int i, j, x, splitString;
 
-	int* word_counter = (int*) calloc(num_ranks, sizeof(int));
+	config.sendBufSize = 0;
 
-	KeyValue** buckets = (KeyValue**) malloc(num_ranks * sizeof(KeyValue*));
+	config.sendBucketSizes = (int*) calloc(config.num_ranks, sizeof(int));
 
-	for(i = 0; i < num_ranks; i++)
-		buckets[i] = (KeyValue*) malloc(BUCKET_SIZE * sizeof(KeyValue));
+	config.buckets = (KeyValue**) malloc(config.num_ranks * sizeof(KeyValue*));
 
-	for(i = 0; i < iterations; i++)
+	for(i = 0; i < config.num_ranks; i++)
+		config.buckets[i] = (KeyValue*) malloc(BUCKET_SIZE * sizeof(KeyValue));
+
+	for(i = 0; i < config.iterations; i++)
 	{
-		if(strlen(text[i]) != 0)
+		if(strlen(config.text[i]) != 0)
 		{
-			tokenize(text[i]);
+			tokenize(config.text[i]);
 
-			char* new_word = strtok(text[i], " ");
+			char* new_word = strtok(config.text[i], " ");
 			while (new_word)
 			{
 				if( (strlen(new_word) + 1) < WORD_LENGTH )
 				{
-					updatingBuckets(num_ranks, new_word, word_counter, buckets, flag);
+					updatingBuckets(new_word);
 				}
 				else
 				{
-					int l, x;
 					int splitString = (int)(strlen(new_word)/WORD_LENGTH) + 1;
 
 					char** aux_word = (char**) malloc(splitString * sizeof(char*));
 
-					for(l = 0; l < splitString; l++)
+					for(j = 0; j < splitString; j++)
 					{
-						if(l != splitString-1)
+						if(j != splitString-1)
 						{
-							aux_word[l] = (char*) malloc(WORD_LENGTH * sizeof(char));
+							aux_word[j] = (char*) malloc(WORD_LENGTH * sizeof(char));
 
 							for(x = 0; x < WORD_LENGTH - 1; x++)
-								aux_word[l][x] = new_word[x + l*(WORD_LENGTH-1)];;
+								aux_word[j][x] = new_word[x + j*(WORD_LENGTH-1)];;
 
-							aux_word[l][x] = '\0';
+							aux_word[j][x] = '\0';
 						}
 						else
 						{
-							aux_word[l] = (char*) malloc(( strlen(new_word) - ( (splitString - 1) * (WORD_LENGTH - 1) ) ) * sizeof(char));
+							aux_word[j] = (char*) malloc(( strlen(new_word) - ( (splitString - 1) * (WORD_LENGTH - 1) ) ) * sizeof(char));
 
 							for(x = 0; x < ( strlen(new_word) - ( (splitString - 1) * (WORD_LENGTH - 1) ) ); x++)
-								aux_word[l][x] = new_word[x + l*(WORD_LENGTH-1)];
+								aux_word[j][x] = new_word[x + j*(WORD_LENGTH-1)];
 
-							aux_word[l][x] = '\0';
+							aux_word[j][x] = '\0';
 						}
 					}
 
-					for(l = 0; l < splitString; l++)
-						updatingBuckets(num_ranks, aux_word[l], word_counter, buckets, flag);
+					for(j = 0; j < splitString; j++)
+						updatingBuckets(aux_word[j]);
 				}
 
-				flag = 1;
 				new_word = strtok(NULL, " ");
 			}
 		}
 	}
 
-	for(i = 0; i < num_ranks; i++)
-	{
-		printf("Rank: %d word_counter[%d]: %d\n", rank, i, word_counter[i]);
-		for(j = 0; j < 10; j++)
-			printf("buckets[%d][%d].key: %s\nbuckets[%d][%d].value: %d\n", i, j, buckets[i][j].key, i, j, buckets[i][j].value);
-	}
-
 	/*
-	for(int i = 0; i < num_ranks; i++)
+	printf("\nRank: %d\ntotalWords: %d\n", config.rank, config.sendBufSize);
+	for(i = 0; i < config.num_ranks; i++)
 	{
-		sbucket_sizes[i] = word_counter[i];
+		printf("config.sendBucketSizes[%d]: %d\n", i, config.sendBucketSizes[i]);
+		for(j = 0; j < 10; j++)
+			printf("config.buckets[%d][%d].key: %s\nconfig.buckets[%d][%d].value: %d\n", i, j, config.buckets[i][j].key, i, j, config.buckets[i][j].value);
 	}
 	*/
-
-	return buckets;
 }
 
-void createKeyValueDatatype(MPI_Datatype *MPI_KeyValue)
+void createKeyValueDatatype()
 {
 	const int count = 2;
 	int array_of_blocklengths[2] = {WORD_LENGTH, 1};
 	MPI_Aint array_of_displacements[2] = {offsetof(KeyValue, key), offsetof(KeyValue, value)};
 	MPI_Datatype array_of_types[2] = {MPI_CHAR, MPI_UINT64_T};
 	
-    MPI_Type_create_struct(count, array_of_blocklengths, array_of_displacements, array_of_types, MPI_KeyValue);
-    MPI_Type_commit(MPI_KeyValue);
-    
-    return;
+    MPI_Type_create_struct(count, array_of_blocklengths, array_of_displacements, array_of_types, &config.MPI_KeyValue);
+    MPI_Type_commit(&config.MPI_KeyValue);
 }
 
-
-void reduce(KeyValue** buckets, int rank, int num_ranks, int *sbucket_sizes)
+void redistributeKeyValues()
 {
-	printf("RANK %d IN REDUCE\n", rank);
-	int sbuf_size = 0;
-	int rbuf_size = 0;
-	int *rbucket_sizes = (int*)malloc(num_ranks * sizeof(int));
-	int *scounts = (int*)malloc(num_ranks * sizeof(int));
-	int *rcounts = (int*)malloc(num_ranks * sizeof(int));
-	int *sdispls = (int*)malloc(num_ranks * sizeof(int));
-	int *rdispls = (int*)malloc(num_ranks * sizeof(int));
-	for(int i = 0; i < num_ranks; i++)
+	config.recvBufSize = 0;
+	config.recvBucketSizes = (int*) calloc(config.num_ranks, sizeof(int));
+	config.sendDispls = (int*) calloc(config.num_ranks, sizeof(int));
+	config.recvDispls = (int*) calloc(config.num_ranks, sizeof(int));
+
+	for(int i = 0; i < config.num_ranks; i++)
 	{
-		printf("\nRANK: %d\nSEND\nSIZE OF BUCKET[%d]: %d\n", rank,  i, sbucket_sizes[i]);
-		if(sbucket_sizes[i] > 0)
+		if(config.sendBucketSizes[i] == 0)
 		{
-			sbuf_size += sbucket_sizes[i];
-		} else {
-			sbuf_size += 1;
+			config.sendBufSize += 1;
 		}
 	}
 
-	for (int i = 0; i < num_ranks; i++)
-	{
-			 rbucket_sizes[i] = 0;
-	}
-	MPI_Alltoall(sbucket_sizes, 1, MPI_INT, rbucket_sizes, 1, MPI_INT,  MPI_COMM_WORLD);
+	MPI_Alltoall(config.sendBucketSizes, 1, MPI_INT, config.recvBucketSizes, 1, MPI_INT,  MPI_COMM_WORLD);
 
-	for(int i = 0; i < num_ranks; i++)
+	//IF A BUCKET IS EMPTY IN CASE OF A PROCESS NOT READ ANYTHING (SMALL FILE CASE)
+	
+	for(int i = 0; i < config.num_ranks; i++)
 	{
-		printf("\nRANK: %d\nRECV\nSIZE OF BUCKET[%d]: %d\n", rank, i, rbucket_sizes[i]);
-		rbuf_size += rbucket_sizes[i];
-		scounts[i] = i;
-		rcounts[i] = rank;
-	}
-	KeyValue *sendbuf = (KeyValue*)malloc(sbuf_size * sizeof(KeyValue));
-	KeyValue *recvbuf = (KeyValue*)malloc(rbuf_size * sizeof(KeyValue));
-	int rdisp = 0;
-	int sdisp = 0;
-	for(int i = 0; i < num_ranks; i++)
-	{
-		sdispls[i] = sdisp;
-		rdispls[i] = rdisp;
-		if(sbucket_sizes[i] > 0)
+		if(config.recvBucketSizes[i] > 0)
 		{
-			for(int j = 0; j < sbucket_sizes[i]; j++)
+			config.recvBufSize += config.recvBucketSizes[i];
+		} 
+		else 
+		{
+			config.recvBufSize += 1;
+			config.recvBucketSizes[i] = 1;
+		}
+	}
+
+	config.sendBuf = (KeyValue*) malloc(config.sendBufSize * sizeof(KeyValue));
+	config.recvBuf = (KeyValue*) malloc(config.recvBufSize * sizeof(KeyValue));
+	
+	int sDispAux = 0;
+	int rDispAux = 0;
+	
+	int i;
+	for(i = 0; i < config.num_ranks; i++)
+	{
+		config.sendDispls[i] = sDispAux;
+		config.recvDispls[i] = rDispAux;
+
+		if(config.sendBucketSizes[i] > 0)
+		{
+			for(int j = 0; j < config.sendBucketSizes[i]; j++)
 			{
-				sendbuf[j+sdisp] = buckets[i][j];
+				config.sendBuf[j+sDispAux] = config.buckets[i][j];
 			}
-			sdisp += sbucket_sizes[i];
-		} else {
-			sendbuf[sdisp].value = (uint64_t)-1;
-			sdisp += 1;
-		}
-		if(rbucket_sizes > 0)
+
+			sDispAux += config.sendBucketSizes[i];
+		} 
+		else 
 		{
-			rdisp = rbucket_sizes[i];
-		} else {
-			rdisp += 1;
+			config.sendBuf[sDispAux].value = (uint64_t)-1;
+			sDispAux += 1;
+			config.sendBucketSizes[i] += 1;
+		}
+
+		if(config.recvBucketSizes > 0)
+		{
+			rDispAux += config.recvBucketSizes[i];
+		} 
+		else 
+		{
+			rDispAux += 1;
+			config.recvBucketSizes[i] = 1;
 		}
 	}
-	if(rank== 0)
+
+	printf("\nRANK: %d sBufSize %d rBufSize: %d\n", config.rank, config.sendBufSize, config.recvBufSize);
+
+	for(int i = 0; i < config.num_ranks; i++)
 	{
-		printf("SENDBUF[0].value: %ld\n", sendbuf[0].value);
-		printf("BUCKETS[0][0].value: %ld\n", buckets[0][0].value);
-		printf("SENDBUF[0].key: %s\n", sendbuf[0].key);
-		printf("BUCKETS[0][0].key: %s\n", buckets[0][0].key);
-		printf("RANK 0: SIZE: %d\n", sbuf_size);
-	} else {
-		printf("RANK 1: SENDBUF[0].value: %ld\n", sendbuf[0].value);
-		printf("RANK 1: SIZE: %d\n", sbuf_size);
+		printf("\nRANK: %d SIZE OF SEND BUCKET[%d]: %d\n", config.rank, i, config.sendBucketSizes[i]);
+		printf("\nRANK: %d SIZE OF RECV BUCKET[%d]: %d\n", config.rank, i, config.recvBucketSizes[i]);
 	}
-	MPI_Alltoallv(sendbuf, scounts, sdispls, MPI_INT, recvbuf, rcounts, rdispls, MPI_INT, MPI_COMM_WORLD);
+	
+	MPI_Alltoallv(config.sendBuf, config.sendBucketSizes, config.sendDispls, config.MPI_KeyValue, config.recvBuf, config.recvBucketSizes, config.recvDispls, config.MPI_KeyValue, MPI_COMM_WORLD);
+	
+	if(config.rank == 0) 
+	{
+		for(int i = 0; i < config.recvBufSize; i++)
+		{
+			printf("config.recvBuf[%d].key: %s\n", i, config.recvBuf[i].key);
+			printf("config.recvBuf[%d].value: %ld\n", i, config.recvBuf[i].value);
+		}
+	}
 }
-
-
-/*
-int Calculate_SendRecv_Count_And_Displs(std::vector<std::map<std::string, uint64_t> > &bucket, int *s_redistr_sizes,
-  int *r_redistr_sizes, int *s_redistr_displs,int *r_redistr_displs, uint64_t &num_keyvalues_tot, const int num_ranks){
-    for(int i = 0; i < num_ranks; i++) {
-      s_redistr_sizes[i] = bucket[i].size();
-      s_redistr_displs[i] = num_keyvalues_tot;
-      num_keyvalues_tot += bucket[i].size();
-    }
-
-    MPI_Alltoall(s_redistr_sizes, 1, MPI_INT, r_redistr_sizes, 1, MPI_INT, MPI_COMM_WORLD);
-
-    r_redistr_displs[0] = 0;
-    for(int i = 1; i < num_ranks; i++) {
-      r_redistr_displs[i] = r_redistr_sizes[i-1] + r_redistr_displs[i-1];
-    }
-
-    return 1;
-}
-*/

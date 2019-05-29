@@ -11,8 +11,7 @@ void print_usage(char*);
 
 int main(int argc, char *argv[])
 {
-	int opt, world_rank, num_ranks;
-	int repeat = 1;
+	int opt, repeat = 1;
 	char *filename = NULL;
 
 	int hr = MPI_Init(&argc, &argv);
@@ -22,9 +21,6 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "Error with MPI_Init\n");
 		exit(1);
 	}
-
-	MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
-  	MPI_Comm_size(MPI_COMM_WORLD, &num_ranks);
 
 	while ((opt = getopt(argc, argv, "r:i:")) != -1) {
 		switch (opt) {
@@ -56,20 +52,16 @@ int main(int argc, char *argv[])
 			print_usage(argv[0]);
 	*/
 
-	int iterations;
-	char** text = readFile(filename, world_rank, num_ranks, &iterations);
+	readFile(filename);
 
-	int *sbucket_sizes = (int*)malloc(num_ranks*sizeof(int));
-	KeyValue** buckets = map(world_rank, num_ranks, iterations, text, sbucket_sizes);
+	map();
 
-	MPI_Datatype MPI_KeyValue;
-	createKeyValueDatatype(&MPI_KeyValue);
+	createKeyValueDatatype();
 
 	MPI_Barrier(MPI_COMM_WORLD);
 
-
-	reduce(buckets, world_rank, num_ranks, sbucket_sizes);
-
+	redistributeKeyValues();
+	
 	MPI_Finalize();
 	return 0;
 }

@@ -22,23 +22,27 @@ typedef uint64_t Hash;
 #define WORD_LENGTH 32
 #define BUCKET_SIZE 100
 
+// Structure to store the <key,value> pairs
 typedef struct KeyValue {
 	char key[WORD_LENGTH];
 	uint64_t value;
 } KeyValue;
 
 // Function for reading the file
-char** readFile(char* filename, int rank, int num_ranks, int* iterations);
+void readFile(char* filename);
 
 // Functions for the Map() phase
 void tokenize(char* text_array);
-Hash getDestRank(const char *word, size_t length, int num_ranks);
-void updatingBuckets(int num_ranks, char* new_word, int* word_counter, KeyValue** buckets, int flag);
-KeyValue** map(int rank, int num_ranks, int iterations, char** text, int *sdispls);
+Hash getDestRank(const char *word, size_t length);
+void updatingBuckets(char* new_word);
+void map();
 
 // Functions for redistributing the <key, value> pairs
-void createKeyValueDatatype(MPI_Datatype *MPI_KeyValue);
+void createKeyValueDatatype();
+void redistributeKeyValues();
 
-void reduce(KeyValue** buckets, int rank, int num_ranks, int *sbucket_sizes);
+// Functions for the Reduce() phase
+
+
 
 #endif //__WORD_COUNT_H__
