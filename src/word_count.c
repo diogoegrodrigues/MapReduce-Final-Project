@@ -1,3 +1,6 @@
+#include <ctype.h>
+#include <stdint.h>
+
 #include "word_count.h"
 
 const char 			 key_seed[SEED_LENGTH] = "b4967483cf3fa84a3a233208c129471ebc49bdd3176c8fb7a2c50720eb349461";
@@ -20,15 +23,19 @@ struct Config {
 	MPI_Datatype MPI_KeyValue;
 
 	/* Variables to process all the redistribution of the <key, value> pairs */
+	/* Send */
 	int sendBufSize;
 	int* sendBucketSizes;
+	int* sendDispls;
+	KeyValue* sendBuf;
+	/* Receive */
 	int recvBufSize;
 	int* recvBucketSizes;
-	int* sendDispls;
 	int* recvDispls;
-	KeyValue* sendBuf;
 	KeyValue* recvBuf;
 
+	/* Variable to count all the <key, value> pairs after the reduction phase and array to store them */
+	int counter;
 	KeyValue* reducedBuf;
 };
 
@@ -51,7 +58,7 @@ void readFile(char* filename)
 		printf("File Size in bytes: %llu\nFile Size in MB: %f\n\n", filesize, (double)(filesize*0.00000095367432));
 	}
 
-	MPI_Bcast(&filesize, 1, MPI_INT, 0, MPI_COMM_WORLD);
+	MPI_Bcast(&filesize, 1, MPI_LONG, 0, MPI_COMM_WORLD);
 
 	MPI_Aint length = CHUNK_SIZE * sizeof(char);
 	MPI_Aint extent = config.num_ranks * length;
@@ -64,6 +71,8 @@ void readFile(char* filename)
 		config.iterations = (int)aux;
 	else
 		config.iterations = (int)aux + 1;
+
+	if(config.rank == 3) printf("filesize: %f extent: %f aux: %f iterations: %d\n", (float)filesize, (float)extent, (float)aux, config.iterations);
 
 	MPI_Type_contiguous(CHUNK_SIZE, MPI_CHAR, &contig);
 	MPI_Type_create_resized(contig, 0, extent, &filetype);
@@ -82,12 +91,15 @@ void readFile(char* filename)
 
 	MPI_File_close(&fh);
 
-	for(i = 0; i < config.iterations; i++)
+	if(config.rank == 0)
 	{
-		if(strlen(config.text[i])==0)
-			printf("Rank: %d\ntext[%d]: empty!!!\n\n", config.rank, i);
-		else
-			printf("Rank: %d\nstrlen: %lu\ntext[%d][0]: %c\n\n", config.rank, strlen(config.text[i]), i, config.text[i][0]);
+		for(i = 0; i < config.iterations; i++)
+		{
+			if(strlen(config.text[i])==0)
+				printf("Rank: %d\ntext[%d]: empty!!!\n\n", config.rank, i);
+			else
+				printf("Rank: %d\nstrlen: %lu\ntext[%d][0]: %c\n\n", config.rank, strlen(config.text[i]), i, config.text[i][0]);
+		}
 	}
 }
 
@@ -139,6 +151,7 @@ void updatingBuckets(char* new_word)
 
 		if( (config.sendBucketSizes[destRank] % BUCKET_SIZE) == 0 )
 		{
+
 			config.buckets[destRank] = (KeyValue*) realloc(config.buckets[destRank], 2 * config.sendBucketSizes[destRank] * sizeof(KeyValue));
 			if(config.buckets[destRank] == NULL)
 			{
@@ -328,12 +341,15 @@ void redistributeKeyValues()
 		}
 	}
 	*/
+
+	// WE CAN FREE ALL THE BUFFERS AND VARIABLES RELATED TO THE SEND OPERATIONS
 }
 
 void reduce()
 {
 	int i, j;
-	int aux = 0, aux2 = 1, auxValue = 0, counter = 0;
+	int aux = 0, aux2 = 1, auxValue = 0;
+	config.counter = 0;
 
 	int start = config.recvDispls[1];
 	int size = config.recvBucketSizes[0];
@@ -350,11 +366,11 @@ void reduce()
 
 		if(strlen(config.recvBuf[i].key) != 0)
 		{
-			if (aux2 != config.num_ranks)
+			if(aux2 != config.num_ranks)
 			{
-				for (j = start; j < config.recvBufSize; j++)
+				for(j = start; j < config.recvBufSize; j++)
 				{
-					if (strcmp(config.recvBuf[i].key, config.recvBuf[j].key) == 0)
+					if(strcmp(config.recvBuf[i].key, config.recvBuf[j].key) == 0)
 					{
 						auxValue += config.recvBuf[j].value;
 
@@ -366,17 +382,103 @@ void reduce()
 				}
 			}
 			
-			counter++;
-			config.reducedBuf[counter - 1] = config.recvBuf[i];
-			config.reducedBuf[counter - 1].value += auxValue;
+			config.counter++;
+			config.reducedBuf[config.counter - 1] = config.recvBuf[i];
+			config.reducedBuf[config.counter - 1].value += auxValue;
 			auxValue = 0;
 		}
 	}
 
-	if (config.rank == 0)
+	printf("Rank: %d config.recvBufSize: %d counter: %d\n", config.rank, config.recvBufSize, config.counter);
+
+	/*
+	if(config.rank == 0)
 	{
-		printf("config.recvBufSize: %d counter: %d\n", config.recvBufSize, counter);
-		for(i = 0; i < counter-1; i++)
+		printf("config.recvBufSize: %d counter: %d\n", config.recvBufSize, config.counter);
+		for(i = 0; i < config.counter; i++)
 			printf("position: %d WORD: %s VALUE: %d\n", i, config.reducedBuf[i].key, config.reducedBuf[i].value);
 	}
+	*/
+
+
+	// WE CAN FREE ALL THE BUFFERS AND VARIABLES RELATED TO THE RECEIVE OPERATIONS, WE JUST NEED THE COUNTER AND THE REDUCED BUFFER
+}
+
+/*
+void createOutputDatatype(int localSize, int* allSizes)
+{
+	// calculate offset
+    int startPosition = 0;
+    int totalSize = 0;
+    i = 0;
+
+    for(i = 0; i < config.num_ranks; i++)
+    {
+    	if(i < config.rank)
+    		startPosition += allSizes[i];
+
+    	totalSize += allSizes[i];
+    }
+
+    // write results to file
+    MPI_Datatype outputDatatype;
+    MPI_Type_create_subarray(1, &totalSize, &localSize, &startPosition, MPI_ORDER_C, MPI_CHAR, &outputDatatype);
+    MPI_Type_commit(&outputDatatype);
+
+}
+*/
+
+void writeFile()
+{
+	int i, localSize = 0;
+	for(i = 0; i < config.counter; i++) 
+	{
+        localSize += strlen(config.reducedBuf[i].key);
+
+        localSize += (int)(log10(abs(config.reducedBuf[i].value))) + 1;
+	
+        if((config.rank == 0) && (i == 0))
+        	printf("value: %d size: %d\n", config.reducedBuf[i].value, (int)(log10(abs(config.reducedBuf[i].value))) + 1);
+
+        // For the space and newline
+        localSize += 3;
+    }
+	
+    char* outputBuf = (char *) malloc((localSize + 1) * sizeof(char));
+
+    int aux = 0;
+    for(i = 0; i < config.counter; i++)
+		aux += sprintf(&outputBuf[aux], "%s; %d\n", config.reducedBuf[i].key, config.reducedBuf[i].value);
+
+    outputBuf[aux] = '\0';
+
+    //if(config.rank == 0) printf("\noutputBuf:\n%s\n", outputBuf);
+
+    int* allSizes = (int*) malloc(config.num_ranks * sizeof(int));
+    MPI_Allgather(&localSize, 1, MPI_INT, allSizes, 1, MPI_INT, MPI_COMM_WORLD);
+
+
+    // calculate offset
+    int startPosition = 0;
+    int totalSize = 0;
+    i = 0;
+
+    for(i = 0; i < config.num_ranks; i++)
+    {
+    	if(i < config.rank)
+    		startPosition += allSizes[i];
+
+    	totalSize += allSizes[i];
+    }
+
+    // write results to file
+    MPI_Datatype outputDatatype;
+    MPI_Type_create_subarray(1, &totalSize, &localSize, &startPosition, MPI_ORDER_C, MPI_CHAR, &outputDatatype);
+    MPI_Type_commit(&outputDatatype);
+
+    MPI_File fh;
+    MPI_File_open(MPI_COMM_WORLD, "results.txt", MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &fh);
+    MPI_File_set_view(fh, 0, MPI_CHAR, outputDatatype, "native", MPI_INFO_NULL);
+    MPI_File_write_all(fh, outputBuf, localSize, MPI_CHAR, MPI_STATUS_IGNORE);
+    MPI_File_close(&fh);
 }

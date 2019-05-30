@@ -12,7 +12,8 @@ void print_usage(char*);
 int main(int argc, char *argv[])
 {
 	int opt, repeat = 1;
-	char *filename = NULL;
+	char* filename = NULL;
+	char* outfile = NULL;
 
 	int hr = MPI_Init(&argc, &argv);
 	if (hr != MPI_SUCCESS)
@@ -22,7 +23,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	while ((opt = getopt(argc, argv, "r:i:")) != -1) {
+	while ((opt = getopt(argc, argv, "r:i:o:")) != -1) {
 		switch (opt) {
 			case 'r':
 				repeat = atoi(optarg);
@@ -30,6 +31,7 @@ int main(int argc, char *argv[])
 			case 'i':
 				filename = optarg;
 				break;
+
 			default:
 				//if (world_rank == 0) print_usage(argv[0]);
 				MPI_Finalize();
@@ -63,7 +65,9 @@ int main(int argc, char *argv[])
 	redistributeKeyValues();
 
 	reduce();
-	
+
+	writeFile();
+
 	MPI_Finalize();
 	return 0;
 }

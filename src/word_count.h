@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <inttypes.h>
 
 #include <mpi.h>
 
@@ -44,5 +45,7 @@ void redistributeKeyValues();
 // Functions for the Reduce() phase
 void reduce();
 
+// Function for writing the file
+void writeFile();
 
 #endif //__WORD_COUNT_H__
