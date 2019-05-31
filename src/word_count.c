@@ -177,7 +177,7 @@ void updatingBuckets(char* new_word)
 		if( (config.sendBucketSizes[destRank] % BUCKET_SIZE) == 0 )
 		{
 
-			config.buckets[destRank] = (KeyValue*) realloc(config.buckets[destRank], 2 * config.sendBucketSizes[destRank] * sizeof(KeyValue));
+			config.buckets[destRank] = (KeyValue*) realloc(config.buckets[destRank], (config.sendBucketSizes[destRank] * 2) * sizeof(KeyValue));
 			if(config.buckets[destRank] == NULL)
 			{
 				fprintf(stderr, "Error in realloc\n");
