@@ -29,6 +29,8 @@ typedef struct KeyValue {
 	uint64_t value;
 } KeyValue;
 
+void initialization();
+
 // Function for reading the file
 void readFile(char* filename);
 
@@ -36,7 +38,7 @@ void readFile(char* filename);
 void tokenize(char* text_array);
 Hash getDestRank(const char *word, size_t length);
 void updatingBuckets(char* new_word);
-void map();
+void map(char* text_array);
 
 // Functions for redistributing the <key, value> pairs
 void createKeyValueDatatype();
@@ -46,6 +48,7 @@ void redistributeKeyValues();
 void reduce();
 
 // Function for writing the file
+MPI_Datatype createOutputDatatype(int localSize, int* allSizes);
 void writeFile();
 
 #endif //__WORD_COUNT_H__

@@ -54,13 +54,11 @@ int main(int argc, char *argv[])
 			print_usage(argv[0]);
 	*/
 
+	initialization();
+
 	readFile(filename);
 
-	map();
-
 	createKeyValueDatatype();
-
-	MPI_Barrier(MPI_COMM_WORLD);
 
 	redistributeKeyValues();
 
