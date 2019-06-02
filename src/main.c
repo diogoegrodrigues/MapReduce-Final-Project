@@ -11,9 +11,12 @@ void print_usage(char*);
 
 int main(int argc, char *argv[])
 {
-	int opt, repeat = 1;
+	int opt, world_rank, repeat = 1;
 	char* filename = NULL;
 	char* outfile = NULL;
+
+	double avg_runtime = 0.0, prev_avg_runtime = 0.0, stddev_runtime = 0.0;
+	double start_time, end_time;
 
 	int hr = MPI_Init(&argc, &argv);
 	if (hr != MPI_SUCCESS)
@@ -23,8 +26,12 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	while ((opt = getopt(argc, argv, "r:i:o:")) != -1) {
-		switch (opt) {
+	MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
+	while ((opt = getopt(argc, argv, "r:i:o:")) != -1) 
+	{
+		switch (opt) 
+		{
 			case 'r':
 				repeat = atoi(optarg);
 				break;
@@ -33,38 +40,48 @@ int main(int argc, char *argv[])
 				break;
 
 			default:
-				//if (world_rank == 0) print_usage(argv[0]);
+				if (world_rank == 0) print_usage(argv[0]);
 				MPI_Finalize();
 				exit(1);
 		}
 	}
 
-	/*
-	if (argv[optind] == NULL || argv[optind + 1] == NULL || argv[optind + 2] == NULL) {
-		if (world_rank == 0) print_usage(argv[0]);
-		MPI_Finalize();
-		exit(1);
+	uint64_t i;
+	for (i = 0; i < repeat; i++)
+	{
+		initialization();
+		
+		MPI_Barrier(MPI_COMM_WORLD);
+		start_time = MPI_Wtime();
+
+		readFile(filename);
+
+		createKeyValueDatatype();
+
+		redistributeKeyValues();
+
+		reduce();
+
+		writeFile();
+
+		MPI_Barrier(MPI_COMM_WORLD);
+		end_time = MPI_Wtime();
+
+		if (world_rank == 0)
+			printf("run %d: %f s\n", i, end_time - start_time);
+
+		prev_avg_runtime = avg_runtime;
+		avg_runtime = avg_runtime + ( (end_time - start_time) - avg_runtime ) / (i + 1);
+		stddev_runtime = stddev_runtime + ( (end_time - start_time) - avg_runtime) * ( (end_time - start_time) - prev_avg_runtime);
+	
+		cleanup();
 	}
-	*/
 
-	/*
-	MPI_Finalize();printf("%s\n", text[0]);
-	if(world_rank == 0 )
-		if(filename == NULL)
-			print_usage(argv[0]);
-	*/
-
-	initialization();
-
-	readFile(filename);
-
-	createKeyValueDatatype();
-
-	redistributeKeyValues();
-
-	reduce();
-
-	writeFile();
+	if (world_rank == 0) 
+	{
+		stddev_runtime = sqrt(stddev_runtime / (repeat - 1));
+		printf("duration\t= %f±%f\n", avg_runtime, stddev_runtime);
+	}
 
 	MPI_Finalize();
 	return 0;

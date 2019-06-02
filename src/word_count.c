@@ -6,15 +6,19 @@
 const char 			 key_seed[SEED_LENGTH] = "b4967483cf3fa84a3a233208c129471ebc49bdd3176c8fb7a2c50720eb349461";
 const unsigned short *key_seed_num 		   = (unsigned short*)key_seed;
 
-struct Config {
+struct Config 
+{
 	/* MPI rank information */
 	int rank, num_ranks;
 
 	/* Number of iterations to read the all file */
-	int iterations;
+	uint64_t iterations;
 
-	/* Buffer to store all the data read from the file */
-	char** text;
+	/* Buffer to store the 64 MB chunks read from the file in each iteration.
+	They are 2 so we can read from the file using collective I/O and 
+	map the <key, value> pairs in parallel */
+	char* textInput;
+	char* textInput2;
 
 	/* Buckets to store the <key, value> pairs for each rank */
 	KeyValue** buckets;
@@ -24,36 +28,49 @@ struct Config {
 
 	/* Variables to process all the redistribution of the <key, value> pairs */
 	/* Send */
-	int sendBufSize;
+	uint64_t sendBufSize;
 	int* sendBucketSizes;
 	int* sendDispls;
 	KeyValue* sendBuf;
 	/* Receive */
-	int recvBufSize;
+	uint64_t recvBufSize;
 	int* recvBucketSizes;
 	int* recvDispls;
 	KeyValue* recvBuf;
 
 	/* Variable to count all the <key, value> pairs after the reduction phase and array to store them */
-	int counter;
+	uint64_t counter;
 	KeyValue* reducedBuf;
+
+	/* Array to store the sizes for writing the output file */
+	int* allSizes;
 };
 
 struct Config config;
 
 void initialization()
 {
-	int i;
+	uint64_t i;
 
 	MPI_Comm_rank(MPI_COMM_WORLD, &config.rank);
-  	MPI_Comm_size(MPI_COMM_WORLD, &config.num_ranks);
+	MPI_Comm_size(MPI_COMM_WORLD, &config.num_ranks);
 
-  	config.sendBufSize = 0;
-	config.sendBucketSizes = (int*) calloc(config.num_ranks, sizeof(int));
+	config.textInput = (char*) malloc(CHUNK_SIZE * sizeof(char));
+	config.textInput2 = (char*) malloc(CHUNK_SIZE * sizeof(char));
 
 	config.buckets = (KeyValue**) malloc(config.num_ranks * sizeof(KeyValue*));
 	for(i = 0; i < config.num_ranks; i++)
 		config.buckets[i] = (KeyValue*) malloc(BUCKET_SIZE * sizeof(KeyValue));
+
+  	config.sendBufSize = 0;
+	config.sendBucketSizes = (int*) calloc(config.num_ranks, sizeof(int));
+	config.sendDispls = (int*) calloc(config.num_ranks, sizeof(int));
+
+	config.recvBufSize = 0;
+	config.recvBucketSizes = (int*) calloc(config.num_ranks, sizeof(int));
+	config.recvDispls = (int*) calloc(config.num_ranks, sizeof(int));
+
+	config.allSizes = (int*) calloc(config.num_ranks, sizeof(int));
 }
 
 
@@ -61,7 +78,7 @@ void readFile(char* filename)
 {
 	MPI_File fh;
 	MPI_Offset filesize;
-	MPI_Request requests[config.num_ranks];
+	MPI_Request request;
 
   	if(config.rank == 0)
 	{
@@ -69,7 +86,7 @@ void readFile(char* filename)
 		MPI_File_get_size(fh, &filesize);
 		MPI_File_close(&fh);
 
-		printf("File Size in bytes: %llu\nFile Size in MB: %f\n", filesize, (double)(filesize*0.00000095367432));
+		printf("File Size in bytes: %llu\nFile Size in MB: %f\n\n", filesize, (double)(filesize*0.00000095367432));
 	}
 
 	MPI_Bcast(&filesize, 1, MPI_LONG, 0, MPI_COMM_WORLD);
@@ -81,49 +98,33 @@ void readFile(char* filename)
 
 	float aux = (float)filesize / (float)extent;
 
-	if( (aux != 0) && (aux - (int)aux == 0) )
-		config.iterations = (int)aux;
+	if( (aux != 0) && (aux - (uint64_t)aux == 0) )
+		config.iterations = (uint64_t)aux;
 	else
-		config.iterations = (int)aux + 1;
-
-	if(config.rank == 3) printf("filesize: %f extent: %f aux: %f iterations: %d\n\n", (float)filesize, (float)extent, (float)aux, config.iterations);
+		config.iterations = (uint64_t)aux + 1;
 
 	MPI_Type_contiguous(CHUNK_SIZE, MPI_CHAR, &contig);
 	MPI_Type_create_resized(contig, 0, extent, &filetype);
 	MPI_Type_commit(&filetype);
 
-	int i;
-	config.text = (char**) malloc(config.iterations * sizeof(char*));
-	for(i = 0; i < config.iterations; i++)
-		config.text[i] = (char*) malloc(CHUNK_SIZE * sizeof(char));
-
 	MPI_File_open(MPI_COMM_WORLD, filename, MPI_MODE_RDONLY, MPI_INFO_NULL, &fh);
 	MPI_File_set_view(fh, disp, MPI_CHAR, filetype, "native", MPI_INFO_NULL);
 
-	for(i = 0; i < config.iterations; i++)
+	MPI_File_read_all(fh, config.textInput, CHUNK_SIZE, MPI_CHAR, MPI_STATUS_IGNORE);
+		
+	uint64_t i;
+	for(i = 1; i < config.iterations; i++)
 	{
-		MPI_File_read_all(fh, config.text[i], CHUNK_SIZE, MPI_CHAR, MPI_STATUS_IGNORE);
+		MPI_File_iread_all(fh, config.textInput2, CHUNK_SIZE, MPI_CHAR, &request);
 		
-		if(strlen(config.text[i])==0)
-			printf("Rank: %d\ntext[%d]: empty!!!\n\n", config.rank, i);
-		else
-			printf("Rank: %d\nstrlen: %lu\ntext[%d][0]: %c\n\n", config.rank, strlen(config.text[i]), i, config.text[i][0]);
-		
-		map(config.text[i]);
+		map(config.textInput);
 
-		/*
-		MPI_File_iread_all(fh, config.text[i], CHUNK_SIZE, MPI_CHAR, requests);
-		
-		if(strlen(config.text[i])==0)
-			printf("Rank: %d\ntext[%d]: empty!!!\n\n", config.rank, i);
-		else
-			printf("Rank: %d\nstrlen: %lu\ntext[%d][0]: %c\n\n", config.rank, strlen(config.text[i]), i, config.text[i][0]);
-		
-		map(config.text[i]);
+		MPI_Wait(&request, MPI_STATUS_IGNORE);
 
-		MPI_Waitall(config.num_ranks, requests, MPI_STATUS_IGNORE);
-		*/
+		strcpy(config.textInput, config.textInput2);
 	}
+
+	map(config.textInput);
 
 	MPI_File_close(&fh);
 }
@@ -154,9 +155,9 @@ Hash getDestRank(const char *word, size_t length)
 
 void updatingBuckets(char* new_word)
 {
-	int i, flag = 1;
+	uint64_t i, flag = 1;
 
-	int destRank = getDestRank(new_word, strlen(new_word) + 1);
+	uint64_t destRank = getDestRank(new_word, strlen(new_word) + 1);
 
 	for(i = 0; i <= config.sendBucketSizes[destRank]; i++)
 	{
@@ -176,7 +177,6 @@ void updatingBuckets(char* new_word)
 
 		if( (config.sendBucketSizes[destRank] % BUCKET_SIZE) == 0 )
 		{
-
 			config.buckets[destRank] = (KeyValue*) realloc(config.buckets[destRank], (config.sendBucketSizes[destRank] * 2) * sizeof(KeyValue));
 			if(config.buckets[destRank] == NULL)
 			{
@@ -199,7 +199,7 @@ void updatingBuckets(char* new_word)
 
 void map(char* text_array)
 {
-	int i, j, splitString;
+	uint64_t i, j, splitString;
 	
 	if(strlen(text_array) != 0)
 	{
@@ -208,13 +208,13 @@ void map(char* text_array)
 		char* new_word = strtok(text_array, " ");
 		while (new_word)
 		{
-			if( (strlen(new_word) + 1) < WORD_LENGTH )
+			if( strlen(new_word) < WORD_LENGTH )
 			{
 				updatingBuckets(new_word);
 			}
 			else
 			{
-				int splitString = (int)(strlen(new_word)/WORD_LENGTH) + 1;
+				splitString = (uint64_t)(strlen(new_word)/WORD_LENGTH) + 1;
 
 				char** aux_word = (char**) malloc(splitString * sizeof(char*));
 
@@ -241,22 +241,17 @@ void map(char* text_array)
 				}
 
 				for(i = 0; i < splitString; i++)
+				{
 					updatingBuckets(aux_word[i]);
+					free(aux_word[i]);
+				}
+
+				free(aux_word);
 			}
 
 			new_word = strtok(NULL, " ");
 		}
 	}
-
-	/*
-	printf("\nRank: %d\ntotalWords: %d\n", config.rank, config.sendBufSize);
-	for(i = 0; i < config.num_ranks; i++)
-	{
-		printf("config.sendBucketSizes[%d]: %d\n", i, config.sendBucketSizes[i]);
-		for(j = 0; j < 10; j++)
-			printf("config.buckets[%d][%d].key: %s\nconfig.buckets[%d][%d].value: %d\n", i, j, config.buckets[i][j].key, i, j, config.buckets[i][j].value);
-	}
-	*/
 }
 
 void createKeyValueDatatype()
@@ -272,25 +267,15 @@ void createKeyValueDatatype()
 
 void redistributeKeyValues()
 {
-	config.recvBufSize = 0;
-	config.recvBucketSizes = (int*) calloc(config.num_ranks, sizeof(int));
-	config.sendDispls = (int*) calloc(config.num_ranks, sizeof(int));
-	config.recvDispls = (int*) calloc(config.num_ranks, sizeof(int));
-
-	for(int i = 0; i < config.num_ranks; i++)
-	{
-		if(config.sendBucketSizes[i] == 0)
-		{
-			config.sendBufSize += 1;
-		}
-	}
+	uint64_t i, j;
 
 	MPI_Alltoall(config.sendBucketSizes, 1, MPI_INT, config.recvBucketSizes, 1, MPI_INT,  MPI_COMM_WORLD);
 
-	//IF A BUCKET IS EMPTY IN CASE OF A PROCESS NOT READ ANYTHING (SMALL FILE CASE)
-	
-	for(int i = 0; i < config.num_ranks; i++)
-	{
+	/* The else condition shown below is in the case of a bucket that is empty. 
+	This just happen if a process not read anything from the file 
+	(case of the wikipedia_test_small.txt) */
+	for(i = 0; i < config.num_ranks; i++)
+	{	
 		if(config.recvBucketSizes[i] > 0)
 		{
 			config.recvBufSize += config.recvBucketSizes[i];
@@ -305,10 +290,9 @@ void redistributeKeyValues()
 	config.sendBuf = (KeyValue*) malloc(config.sendBufSize * sizeof(KeyValue));
 	config.recvBuf = (KeyValue*) malloc(config.recvBufSize * sizeof(KeyValue));
 	
-	int sDispAux = 0;
-	int rDispAux = 0;
+	uint64_t sDispAux = 0;
+	uint64_t rDispAux = 0;
 	
-	int i;
 	for(i = 0; i < config.num_ranks; i++)
 	{
 		config.sendDispls[i] = sDispAux;
@@ -316,21 +300,22 @@ void redistributeKeyValues()
 
 		if(config.sendBucketSizes[i] > 0)
 		{
-			for(int j = 0; j < config.sendBucketSizes[i]; j++)
+			for(j = 0; j < config.sendBucketSizes[i]; j++)
 			{
-				config.sendBuf[j+sDispAux] = config.buckets[i][j];
+				config.sendBuf[j + sDispAux] = config.buckets[i][j];
 			}
 
 			sDispAux += config.sendBucketSizes[i];
 		} 
 		else 
 		{
-			config.sendBuf[sDispAux].value = (uint64_t)-1;
+			config.sendBuf[sDispAux].key[0] = '\0';
+			config.sendBuf[sDispAux].value = 0;
 			sDispAux += 1;
-			config.sendBucketSizes[i] += 1;
+			config.sendBucketSizes[i] = 1;
 		}
 
-		if(config.recvBucketSizes > 0)
+		if(config.recvBucketSizes[i] > 0)
 		{
 			rDispAux += config.recvBucketSizes[i];
 		} 
@@ -342,29 +327,16 @@ void redistributeKeyValues()
 	}
 	
 	MPI_Alltoallv(config.sendBuf, config.sendBucketSizes, config.sendDispls, config.MPI_KeyValue, config.recvBuf, config.recvBucketSizes, config.recvDispls, config.MPI_KeyValue, MPI_COMM_WORLD);
-	
-	/*
-	if(config.rank == 0) 
-	{
-		for(int i = 0; i < config.recvBufSize; i++)
-		{
-			printf("config.recvBuf[%d].key: %s\n", i, config.recvBuf[i].key);
-			printf("config.recvBuf[%d].value: %ld\n", i, config.recvBuf[i].value);
-		}
-	}
-	*/
-
-	// WE CAN FREE ALL THE BUFFERS AND VARIABLES RELATED TO THE SEND OPERATIONS
 }
 
 void reduce()
 {
-	int i, j;
-	int aux = 0, aux2 = 1, auxValue = 0;
+	uint64_t i, j;
+	uint64_t aux = 0, aux2 = 1, auxValue = 0;
 	config.counter = 0;
 
-	int start = config.recvDispls[1];
-	int size = config.recvBucketSizes[0];
+	uint64_t start = config.recvDispls[1];
+	uint64_t size = config.recvBucketSizes[0];
 
 	config.reducedBuf = (KeyValue*) malloc(config.recvBufSize * sizeof(KeyValue));
 
@@ -387,9 +359,6 @@ void reduce()
 						auxValue += config.recvBuf[j].value;
 
 						config.recvBuf[j].key[0] = '\0';
-
-						//if(strlen(config.recvBuf[j].key) == 0)
-						//	printf("position: %d WORD: %s\n", config.recvBuf[i].key);
 					}
 				}
 			}
@@ -400,26 +369,13 @@ void reduce()
 			auxValue = 0;
 		}
 	}
-
-	printf("Rank: %d config.recvBufSize: %d counter: %d\n", config.rank, config.recvBufSize, config.counter);
-
-	/*
-	if(config.rank == 0)
-	{
-		printf("config.recvBufSize: %d counter: %d\n", config.recvBufSize, config.counter);
-		for(i = 0; i < config.counter; i++)
-			printf("position: %d WORD: %s VALUE: %d\n", i, config.reducedBuf[i].key, config.reducedBuf[i].value);
-	}
-	*/
-
-
-	// WE CAN FREE ALL THE BUFFERS AND VARIABLES RELATED TO THE RECEIVE OPERATIONS, WE JUST NEED THE COUNTER AND THE REDUCED BUFFER
 }
 
 
 MPI_Datatype createOutputDatatype(int localSize, int* allSizes)
 {
-	int i, startPosition = 0, totalSize = 0;
+	int startPosition = 0, totalSize = 0;
+	uint64_t i;
 
     for(i = 0; i < config.num_ranks; i++)
     {
@@ -429,7 +385,7 @@ MPI_Datatype createOutputDatatype(int localSize, int* allSizes)
     	totalSize += allSizes[i];
     }
 
-    // write results to file
+    // Datatype that permits write results to file with collective I/O
     MPI_Datatype outputDatatype;
     MPI_Type_create_subarray(1, &totalSize, &localSize, &startPosition, MPI_ORDER_C, MPI_CHAR, &outputDatatype);
     MPI_Type_commit(&outputDatatype);
@@ -439,38 +395,58 @@ MPI_Datatype createOutputDatatype(int localSize, int* allSizes)
 
 void writeFile()
 {
-	int i, localSize = 0;
+	MPI_Request request;
+
+	uint64_t i, localSize = 0;
 	for(i = 0; i < config.counter; i++) 
 	{
         localSize += strlen(config.reducedBuf[i].key);
 
-        localSize += (int)(log10(abs(config.reducedBuf[i].value))) + 1;
-	
-        if((config.rank == 0) && (i == 0))
-        	printf("value: %d size: %d\n", config.reducedBuf[i].value, (int)(log10(abs(config.reducedBuf[i].value))) + 1);
+        localSize += (uint64_t)(log10(abs(config.reducedBuf[i].value))) + 1;
 
         // For the semicolon, space and newline
         localSize += 3;
     }
+
+    MPI_Iallgather(&localSize, 1, MPI_INT, config.allSizes, 1, MPI_INT, MPI_COMM_WORLD, &request);
 	
     char* outputBuf = (char *) malloc((localSize + 1) * sizeof(char));
 
-    int aux = 0;
+    uint64_t aux = 0;
     for(i = 0; i < config.counter; i++)
-		aux += sprintf(&outputBuf[aux], "%s; %d\n", config.reducedBuf[i].key, config.reducedBuf[i].value);
+    	aux += sprintf(&outputBuf[aux], "%s; %"PRIu64"\n", config.reducedBuf[i].key, config.reducedBuf[i].value);
 
     outputBuf[aux] = '\0';
 
-    //if(config.rank == 0) printf("\noutputBuf:\n%s\n", outputBuf);
+    MPI_Wait(&request, MPI_STATUS_IGNORE);
 
-    int* allSizes = (int*) malloc(config.num_ranks * sizeof(int));
-    MPI_Allgather(&localSize, 1, MPI_INT, allSizes, 1, MPI_INT, MPI_COMM_WORLD);
-
-    MPI_Datatype outputDatatype = createOutputDatatype(localSize, allSizes);
+    MPI_Datatype outputDatatype = createOutputDatatype(localSize, config.allSizes);
 
     MPI_File fh;
     MPI_File_open(MPI_COMM_WORLD, "results.txt", MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &fh);
     MPI_File_set_view(fh, 0, MPI_CHAR, outputDatatype, "native", MPI_INFO_NULL);
     MPI_File_write_all(fh, outputBuf, localSize, MPI_CHAR, MPI_STATUS_IGNORE);
     MPI_File_close(&fh);
+
+    free(outputBuf);
+}
+
+void cleanup()
+{
+	free(config.textInput);
+	free(config.textInput2);
+
+	uint64_t i;
+	for(i = 0; i < config.num_ranks; i++)
+		free(config.buckets[i]);
+	free(config.buckets);
+
+	free(config.sendBucketSizes);
+	free(config.sendDispls);
+	free(config.sendBuf);
+	free(config.recvBucketSizes);
+	free(config.recvDispls);
+	free(config.recvBuf);
+	free(config.reducedBuf);
+	free(config.allSizes);
 }
