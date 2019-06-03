@@ -225,6 +225,7 @@ void map(char* text_array)
 
 				char** aux_word = (char**) malloc(splitString * sizeof(char*));
 
+				#pragma omp parallel for
 				for(i = 0; i < splitString; i++)
 				{
 					if(i != splitString - 1)
@@ -235,6 +236,9 @@ void map(char* text_array)
 							aux_word[i][j] = new_word[j + i*(WORD_LENGTH-1)];;
 
 						aux_word[i][j] = '\0';
+
+						updatingBuckets(aux_word[i]);
+						free(aux_word[i]);
 					}
 					else
 					{
@@ -244,15 +248,12 @@ void map(char* text_array)
 							aux_word[i][j] = new_word[j + i*(WORD_LENGTH-1)];
 
 						aux_word[i][j] = '\0';
+							
+						updatingBuckets(aux_word[i]);
+						free(aux_word[i]);
 					}
 				}
-
-				for(i = 0; i < splitString; i++)
-				{
-					updatingBuckets(aux_word[i]);
-					free(aux_word[i]);
-				}
-
+				
 				free(aux_word);
 			}
 
@@ -281,6 +282,7 @@ void redistributeKeyValues()
 	/* The else condition shown below is in the case of a bucket that is empty. 
 	This just happen if a process not read anything from the file 
 	(case of the wikipedia_test_small.txt) */
+	#pragma omp parallel for
 	for(i = 0; i < config.num_ranks; i++)
 	{	
 		if(config.recvBucketSizes[i] > 0)
@@ -300,36 +302,41 @@ void redistributeKeyValues()
 	uint64_t sDispAux = 0;
 	uint64_t rDispAux = 0;
 
-	for(i = 0; i < config.num_ranks; i++)
+	#pragma omp parallel
 	{
-		config.sendDispls[i] = sDispAux;
-		config.recvDispls[i] = rDispAux;
-
-		if(config.sendBucketSizes[i] > 0)
+		#pragma omp for
+		for(i = 0; i < config.num_ranks; i++)
 		{
-			for(j = 0; j < config.sendBucketSizes[i]; j++)
+			config.sendDispls[i] = sDispAux;
+			config.recvDispls[i] = rDispAux;
+
+			if(config.sendBucketSizes[i] > 0)
 			{
-				config.sendBuf[j + sDispAux] = config.buckets[i][j];
+				#pragma omp parallel for
+				for(j = 0; j < config.sendBucketSizes[i]; j++)
+				{
+					config.sendBuf[j + sDispAux] = config.buckets[i][j];
+				}
+
+				sDispAux += config.sendBucketSizes[i];
+			} 
+			else 
+			{
+				config.sendBuf[sDispAux].key[0] = '\0';
+				config.sendBuf[sDispAux].value = 0;
+				sDispAux += 1;
+				config.sendBucketSizes[i] = 1;
 			}
 
-			sDispAux += config.sendBucketSizes[i];
-		} 
-		else 
-		{
-			config.sendBuf[sDispAux].key[0] = '\0';
-			config.sendBuf[sDispAux].value = 0;
-			sDispAux += 1;
-			config.sendBucketSizes[i] = 1;
-		}
-
-		if(config.recvBucketSizes[i] > 0)
-		{
-			rDispAux += config.recvBucketSizes[i];
-		} 
-		else 
-		{
-			rDispAux += 1;
-			config.recvBucketSizes[i] = 1;
+			if(config.recvBucketSizes[i] > 0)
+			{
+				rDispAux += config.recvBucketSizes[i];
+			} 
+			else 
+			{
+				rDispAux += 1;
+				config.recvBucketSizes[i] = 1;
+			}
 		}
 	}
 	
@@ -347,33 +354,38 @@ void reduce()
 
 	config.reducedBuf = (KeyValue*) malloc(config.recvBufSize * sizeof(KeyValue));
 
-	for(i = 0; i < config.recvBufSize; i++)
+	#pragma omp parallel
 	{
-		if(i == size)
+		#pragma omp for
+		for(i = 0; i < config.recvBufSize; i++)
 		{
-			size += config.recvBucketSizes[++aux];
-			start = config.recvDispls[++aux2];
-		}
-
-		if(strlen(config.recvBuf[i].key) != 0)
-		{
-			if(aux2 != config.num_ranks)
+			if(i == size)
 			{
-				for(j = start; j < config.recvBufSize; j++)
-				{
-					if(strcmp(config.recvBuf[i].key, config.recvBuf[j].key) == 0)
-					{
-						auxValue += config.recvBuf[j].value;
+				size += config.recvBucketSizes[++aux];
+				start = config.recvDispls[++aux2];
+			}
 
-						config.recvBuf[j].key[0] = '\0';
+			if(strlen(config.recvBuf[i].key) != 0)
+			{
+				if(aux2 != config.num_ranks)
+				{
+					#pragma omp parallel for
+					for(j = start; j < config.recvBufSize; j++)
+					{
+						if(strcmp(config.recvBuf[i].key, config.recvBuf[j].key) == 0)
+						{
+							auxValue += config.recvBuf[j].value;
+
+							config.recvBuf[j].key[0] = '\0';
+						}
 					}
 				}
+				
+				config.counter++;
+				config.reducedBuf[config.counter - 1] = config.recvBuf[i];
+				config.reducedBuf[config.counter - 1].value += auxValue;
+				auxValue = 0;
 			}
-			
-			config.counter++;
-			config.reducedBuf[config.counter - 1] = config.recvBuf[i];
-			config.reducedBuf[config.counter - 1].value += auxValue;
-			auxValue = 0;
 		}
 	}
 }
@@ -384,6 +396,7 @@ MPI_Datatype createOutputDatatype(int localSize, int* allSizes)
 	int startPosition = 0, totalSize = 0;
 	uint64_t i;
 
+	#pragma omp parallel for
     for(i = 0; i < config.num_ranks; i++)
     {
     	if(i < config.rank)
@@ -403,8 +416,9 @@ MPI_Datatype createOutputDatatype(int localSize, int* allSizes)
 void writeFile()
 {
 	MPI_Request request;
+	uint64_t i, aux = 0, localSize = 0;
 
-	uint64_t i, localSize = 0;
+	#pragma omp parallel for
 	for(i = 0; i < config.counter; i++) 
 	{
         localSize += strlen(config.reducedBuf[i].key);
@@ -419,7 +433,7 @@ void writeFile()
 
     char* outputBuf = (char *) malloc((localSize + 1) * sizeof(char));
 
-    uint64_t aux = 0;
+    #pragma omp parallel for
     for(i = 0; i < config.counter; i++)
     	aux += sprintf(&outputBuf[aux], "%s; %"PRIu64"\n", config.reducedBuf[i].key, config.reducedBuf[i].value);
 
@@ -444,6 +458,8 @@ void cleanup()
 	free(config.textInput2);
 
 	uint64_t i;
+
+	#pragma omp parallel for
 	for(i = 0; i < config.num_ranks; i++)
 		free(config.buckets[i]);
 	free(config.buckets);
