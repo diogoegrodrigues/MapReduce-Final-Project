@@ -30,6 +30,7 @@ typedef struct KeyValue
 	uint64_t value;
 } KeyValue;
 
+/* Function for initialize variables and allocate memory */
 void initialization();
 
 /* Function for reading the file */

@@ -26,6 +26,9 @@ struct Config
 	/* New MPI_Datatype to be possible to send the <key, value> pairs */
 	MPI_Datatype MPI_KeyValue;
 
+	/* Auxiliar array for knowing where we should do realloc */
+	int* aux;
+
 	/* Variables to process all the redistribution of the <key, value> pairs */
 	/* Send */
 	uint64_t sendBufSize;
@@ -44,8 +47,6 @@ struct Config
 
 	/* Array to store the sizes for writing the output file */
 	int* allSizes;
-
-	int* aux;
 };
 
 struct Config config;
@@ -61,8 +62,13 @@ void initialization()
 	config.textInput2 = (char*) malloc(CHUNK_SIZE * sizeof(char));
 
 	config.buckets = (KeyValue**) malloc(config.num_ranks * sizeof(KeyValue*));
+	config.aux = (int*) calloc(config.num_ranks, sizeof(int));
 	for(i = 0; i < config.num_ranks; i++)
+	{
 		config.buckets[i] = (KeyValue*) malloc(BUCKET_SIZE * sizeof(KeyValue));
+		config.aux[i] = BUCKET_SIZE;
+		if((i == 0)(config.rank == 0)) printf("\n------> BUCKET_SIZE: %d config.aux: %d\n\n\n", BUCKET_SIZE, config.aux[i]);
+	}
 
   	config.sendBufSize = 0;
 	config.sendBucketSizes = (int*) calloc(config.num_ranks, sizeof(int));
@@ -73,11 +79,6 @@ void initialization()
 	config.recvDispls = (int*) calloc(config.num_ranks, sizeof(int));
 
 	config.allSizes = (int*) calloc(config.num_ranks, sizeof(int));
-
-
-	config.aux = (int*) calloc(config.num_ranks, sizeof(int));
-	for(i = 0; i < config.num_ranks; i++)
-		config.aux[i] = BUCKET_SIZE;
 }
 
 void readFile(char* filename)
@@ -184,7 +185,9 @@ void updatingBuckets(char* new_word)
 		{
 			config.aux[destRank] *= 2;
 
-			config.buckets[destRank] = (KeyValue*) realloc(config.buckets[destRank], config.aux[destRank] * sizeof(KeyValue));
+			if(config.rank == 0) printf("config.aux[%d]: %d\n", destRank, config.aux[destRank]);
+
+			config.buckets[destRank] = (KeyValue*) realloc(config.buckets[destRank], (config.aux[destRank] * sizeof(KeyValue)));
 			if(config.buckets[destRank] == NULL)
 			{
 				fprintf(stderr, "Error in realloc\n");
@@ -464,6 +467,7 @@ void cleanup()
 		free(config.buckets[i]);
 	free(config.buckets);
 
+	free(config.aux);
 	free(config.sendBucketSizes);
 	free(config.sendDispls);
 	free(config.sendBuf);
@@ -472,7 +476,4 @@ void cleanup()
 	free(config.recvBuf);
 	free(config.reducedBuf);
 	free(config.allSizes);
-
-
-	free(config.aux);
 }

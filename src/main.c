@@ -49,7 +49,7 @@ int main(int argc, char *argv[])
 	for (i = 0; i < repeat; i++)
 	{
 		initialization();
-		
+				
 		MPI_Barrier(MPI_COMM_WORLD);
 		start_time = MPI_Wtime();
 
