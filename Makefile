@@ -2,7 +2,7 @@ CC = cc
 SRC = $(wildcard src/*.c)
 OBJ = $(SRC:.c=.o)
 BIN = ./bin
-TARGET = MapReduce.out
+TARGET = map_reduce.out
 
 LDFLAGS = -lm 
 CFLAGS = -I./include -g -Wall -O3
@@ -15,10 +15,10 @@ ${BIN}:
 	mkdir -p $(BIN)
 
 %.o: %.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) -fopenmp  $(CFLAGS) -c -o $@ $<
 
 $(BIN)/$(TARGET): $(OBJ)
-	$(CC) $(LDFLAGS) -o $@ $^
+	$(CC) -fopenmp  $(LDFLAGS) -o $@ $^ -lm
 
 .PHONY: clean
 clean:

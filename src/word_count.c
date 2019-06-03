@@ -44,6 +44,8 @@ struct Config
 
 	/* Array to store the sizes for writing the output file */
 	int* allSizes;
+
+	int* aux;
 };
 
 struct Config config;
@@ -71,55 +73,58 @@ void initialization()
 	config.recvDispls = (int*) calloc(config.num_ranks, sizeof(int));
 
 	config.allSizes = (int*) calloc(config.num_ranks, sizeof(int));
-}
 
+
+	config.aux = (int*) calloc(config.num_ranks, sizeof(int));
+	for(i = 0; i < config.num_ranks; i++)
+		config.aux[i] = BUCKET_SIZE;
+}
 
 void readFile(char* filename)
 {
 	MPI_File fh;
 	MPI_Offset filesize;
-	MPI_Request request;
+	MPI_Request request, request2;
 
   	if(config.rank == 0)
 	{
 		MPI_File_open(MPI_COMM_SELF, filename, MPI_MODE_RDONLY, MPI_INFO_NULL, &fh);
 		MPI_File_get_size(fh, &filesize);
 		MPI_File_close(&fh);
-
-		printf("File Size in bytes: %llu\nFile Size in MB: %f\n\n", filesize, (double)(filesize*0.00000095367432));
 	}
 
-	MPI_Bcast(&filesize, 1, MPI_LONG, 0, MPI_COMM_WORLD);
+	MPI_Ibcast(&filesize, 1, MPI_LONG, 0, MPI_COMM_WORLD, &request);
 
 	MPI_Aint length = CHUNK_SIZE * sizeof(char);
 	MPI_Aint extent = config.num_ranks * length;
 	MPI_Offset disp = config.rank * length;
 	MPI_Datatype contig, filetype;
 
-	float aux = (float)filesize / (float)extent;
+	MPI_Type_contiguous(CHUNK_SIZE, MPI_CHAR, &contig);
+	MPI_Type_create_resized(contig, 0, extent, &filetype);
+	MPI_Type_commit(&filetype);
 
+	MPI_Wait(&request, MPI_STATUS_IGNORE);
+
+	float aux = (float)filesize / (float)extent;
 	if( (aux != 0) && (aux - (uint64_t)aux == 0) )
 		config.iterations = (uint64_t)aux;
 	else
 		config.iterations = (uint64_t)aux + 1;
 
-	MPI_Type_contiguous(CHUNK_SIZE, MPI_CHAR, &contig);
-	MPI_Type_create_resized(contig, 0, extent, &filetype);
-	MPI_Type_commit(&filetype);
-
 	MPI_File_open(MPI_COMM_WORLD, filename, MPI_MODE_RDONLY, MPI_INFO_NULL, &fh);
 	MPI_File_set_view(fh, disp, MPI_CHAR, filetype, "native", MPI_INFO_NULL);
 
 	MPI_File_read_all(fh, config.textInput, CHUNK_SIZE, MPI_CHAR, MPI_STATUS_IGNORE);
-		
+	
 	uint64_t i;
 	for(i = 1; i < config.iterations; i++)
 	{
-		MPI_File_iread_all(fh, config.textInput2, CHUNK_SIZE, MPI_CHAR, &request);
+		MPI_File_iread_all(fh, config.textInput2, CHUNK_SIZE, MPI_CHAR, &request2);
 		
 		map(config.textInput);
 
-		MPI_Wait(&request, MPI_STATUS_IGNORE);
+		MPI_Wait(&request2, MPI_STATUS_IGNORE);
 
 		strcpy(config.textInput, config.textInput2);
 	}
@@ -175,9 +180,11 @@ void updatingBuckets(char* new_word)
 		config.sendBucketSizes[destRank]++;
 		config.sendBufSize++;
 
-		if( (config.sendBucketSizes[destRank] % BUCKET_SIZE) == 0 )
+		if( (config.sendBucketSizes[destRank] % config.aux[destRank]) == 0 )
 		{
-			config.buckets[destRank] = (KeyValue*) realloc(config.buckets[destRank], (config.sendBucketSizes[destRank] * 2) * sizeof(KeyValue));
+			config.aux[destRank] *= 2;
+
+			config.buckets[destRank] = (KeyValue*) realloc(config.buckets[destRank], config.aux[destRank] * sizeof(KeyValue));
 			if(config.buckets[destRank] == NULL)
 			{
 				fprintf(stderr, "Error in realloc\n");
@@ -292,7 +299,7 @@ void redistributeKeyValues()
 	
 	uint64_t sDispAux = 0;
 	uint64_t rDispAux = 0;
-	
+
 	for(i = 0; i < config.num_ranks; i++)
 	{
 		config.sendDispls[i] = sDispAux;
@@ -409,7 +416,7 @@ void writeFile()
     }
 
     MPI_Iallgather(&localSize, 1, MPI_INT, config.allSizes, 1, MPI_INT, MPI_COMM_WORLD, &request);
-	
+
     char* outputBuf = (char *) malloc((localSize + 1) * sizeof(char));
 
     uint64_t aux = 0;
@@ -449,4 +456,7 @@ void cleanup()
 	free(config.recvBuf);
 	free(config.reducedBuf);
 	free(config.allSizes);
+
+
+	free(config.aux);
 }

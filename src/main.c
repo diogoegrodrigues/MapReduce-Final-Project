@@ -13,7 +13,6 @@ int main(int argc, char *argv[])
 {
 	int opt, world_rank, repeat = 1;
 	char* filename = NULL;
-	char* outfile = NULL;
 
 	double avg_runtime = 0.0, prev_avg_runtime = 0.0, stddev_runtime = 0.0;
 	double start_time, end_time;
@@ -46,7 +45,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	uint64_t i;
+	int i;
 	for (i = 0; i < repeat; i++)
 	{
 		initialization();
@@ -73,7 +72,7 @@ int main(int argc, char *argv[])
 		prev_avg_runtime = avg_runtime;
 		avg_runtime = avg_runtime + ( (end_time - start_time) - avg_runtime ) / (i + 1);
 		stddev_runtime = stddev_runtime + ( (end_time - start_time) - avg_runtime) * ( (end_time - start_time) - prev_avg_runtime);
-	
+
 		cleanup();
 	}
 
