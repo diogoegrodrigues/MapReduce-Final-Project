@@ -21,7 +21,7 @@ typedef uint64_t Hash;
 /* 64 MB */
 #define CHUNK_SIZE 64 * 1024 * 1024
 #define WORD_LENGTH 32
-#define BUCKET_SIZE 10000
+#define BUCKET_SIZE 100000
 
 /* Structure to store the <key,value> pairs */
 typedef struct KeyValue 

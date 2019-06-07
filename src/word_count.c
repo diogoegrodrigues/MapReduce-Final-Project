@@ -67,7 +67,6 @@ void initialization()
 	{
 		config.buckets[i] = (KeyValue*) malloc(BUCKET_SIZE * sizeof(KeyValue));
 		config.aux[i] = BUCKET_SIZE;
-		if((i == 0)(config.rank == 0)) printf("\n------> BUCKET_SIZE: %d config.aux: %d\n\n\n", BUCKET_SIZE, config.aux[i]);
 	}
 
   	config.sendBufSize = 0;
@@ -184,8 +183,6 @@ void updatingBuckets(char* new_word)
 		if( (config.sendBucketSizes[destRank] % config.aux[destRank]) == 0 )
 		{
 			config.aux[destRank] *= 2;
-
-			if(config.rank == 0) printf("config.aux[%d]: %d\n", destRank, config.aux[destRank]);
 
 			config.buckets[destRank] = (KeyValue*) realloc(config.buckets[destRank], (config.aux[destRank] * sizeof(KeyValue)));
 			if(config.buckets[destRank] == NULL)
